@@ -44,6 +44,7 @@ return [
     ],
     'notifications' => [
         'email_queued' => 'Email queued',
+        'email_not_queued' => 'Email could not be queued',
     ],
     'audit' => [
         'accepted_help' => 'Accepted by Cloudflare means Laravel received a successful provider response. It does not mean delivered.',

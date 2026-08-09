@@ -23,6 +23,7 @@ test('the package provider boots its defaults and the plugin has a stable identi
         ->and(config('filament-cloudflare-mail-sender.from.address'))->toBeNull()
         ->and(config('filament-cloudflare-mail-sender.from.name'))->toBeNull()
         ->and(config('filament-cloudflare-mail-sender.from.editable'))->toBeTrue()
+        ->and(config('filament-cloudflare-mail-sender.queue.connection'))->toBeNull()
         ->and(ConfiguredSender::address())->toBe(config('mail.from.address'))
         ->and(ConfiguredSender::name())->toBe(config('mail.from.name'))
         ->and(ConfiguredSender::editable())->toBeTrue()

@@ -32,7 +32,9 @@ return [
     ],
 
     'queue' => [
-        'connection' => config('queue.default'),
+        // Null falls back to config('queue.default') at runtime. Avoid calling
+        // config('queue.*') here: a published copy loads before queue.php.
+        'connection' => null,
         'name' => 'default',
         'tries' => 3,
         'backoff' => [60, 300, 900],

@@ -96,11 +96,11 @@ The `recipients` configuration maps suggestions to a host Eloquent user model:
 
 Suggestions are conveniences, not an allowlist: authorized users may enter any valid email address. To, CC, and BCC are canonicalized and deduplicated across fields. Cloudflare currently permits at most 50 combined unique recipients, which the package validates before queueing.
 
-Filament's `MarkdownEditor` is the only message-body format. **Send email** validates the form, renders HTML and plain text through the same Markdown service used for delivery, persists the audit snapshot, and queues the job. There is no separate save-draft or preview step.
+Filament's `MarkdownEditor` is the only message-body format. **Send email** (confirmed action below the form) validates the form, renders HTML and plain text through the same Markdown service used for delivery, persists the audit snapshot, and queues the job. There is no separate save-draft or preview step.
 
 ## Queues and delivery semantics
 
-Configure `queue.connection` and `queue.name`, then run a worker for that connection and queue. For example, when both are `database` and `mail`:
+Configure `queue.connection` and `queue.name`, then run a worker for that connection and queue. Leave `queue.connection` null to use the application's `queue.default` at runtime (recommended in published config so load order cannot null out the connection). For example, when both are `database` and `mail`:
 
 ```bash
 php artisan queue:work database --queue=mail

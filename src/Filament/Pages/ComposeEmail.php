@@ -22,6 +22,7 @@ use DrAliRagab\FilamentCloudflareMailSender\Support\MessageDeliveryService;
 use DrAliRagab\FilamentCloudflareMailSender\Support\MessageSnapshotFactory;
 use DrAliRagab\FilamentCloudflareMailSender\Support\OwnedDraftManager;
 use DrAliRagab\FilamentCloudflareMailSender\Support\RecipientAddressSet;
+use Filament\Actions\Action;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\MarkdownEditor;
@@ -29,6 +30,7 @@ use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Schemas\Components\Actions;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
@@ -157,6 +159,9 @@ final class ComposeEmail extends Page
                             ->preserveFilenames()
                             ->storeFileNamesIn('attachment_names'),
                     ]),
+                Actions::make([
+                    $this->sendAction(),
+                ])->key('send-actions'),
             ]);
     }
 
@@ -169,9 +174,7 @@ final class ComposeEmail extends Page
         $rateKey = 'filament-cloudflare-mail-sender:confirm:'.hash('sha256', $actor::class.':'.$this->actorIdentifier($actor));
 
         if (RateLimiter::tooManyAttempts($rateKey, 5)) {
-            throw ValidationException::withMessages([
-                'send' => __('filament-cloudflare-mail-sender::messages.validation.rate_limited'),
-            ]);
+            $this->failSend(__('filament-cloudflare-mail-sender::messages.validation.rate_limited'));
         }
 
         RateLimiter::hit($rateKey, 60);
@@ -182,12 +185,16 @@ final class ComposeEmail extends Page
         } catch (InvalidAttachment $exception) {
             throw ValidationException::withMessages(['data.attachments' => $exception->getMessage()]);
         } catch (MessageDispatchFailed $exception) {
-            throw ValidationException::withMessages(['send' => $exception->getMessage()]);
+            $this->failSend($exception->getMessage());
         } catch (InvalidMessageSnapshot|LogicException $exception) {
             $field = str_contains($exception->getMessage(), 'queue')
                 || str_contains($exception->getMessage(), 'Cloudflare mail transport')
                 ? 'send'
                 : 'data';
+
+            if ($field === 'send') {
+                $this->failSend($exception->getMessage());
+            }
 
             throw ValidationException::withMessages([$field => $exception->getMessage()]);
         }
@@ -198,6 +205,30 @@ final class ComposeEmail extends Page
             ->send();
 
         $this->resetComposer();
+    }
+
+    public function sendAction(): Action
+    {
+        return Action::make('send')
+            ->label(__('filament-cloudflare-mail-sender::messages.actions.send'))
+            ->requiresConfirmation()
+            ->modalHeading(__('filament-cloudflare-mail-sender::messages.actions.send'))
+            ->modalDescription(__('filament-cloudflare-mail-sender::messages.actions.send_confirmation'))
+            ->modalSubmitActionLabel(__('filament-cloudflare-mail-sender::messages.actions.send'))
+            ->action(function (): void {
+                $this->sendEmail();
+            });
+    }
+
+    private function failSend(string $message): never
+    {
+        Notification::make()
+            ->title(__('filament-cloudflare-mail-sender::messages.notifications.email_not_queued'))
+            ->body($message)
+            ->danger()
+            ->send();
+
+        throw ValidationException::withMessages(['send' => $message]);
     }
 
     public function uniqueRecipientCount(): int

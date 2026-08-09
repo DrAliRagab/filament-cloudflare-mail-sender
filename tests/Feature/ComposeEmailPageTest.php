@@ -19,6 +19,7 @@ use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\TextInput;
 use Filament\Panel;
+use Filament\Actions\Testing\TestAction;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
@@ -95,6 +96,17 @@ test('compose exposes native fields and a single send action without draft or pr
                 && $component->getDiskName() === 'local'
                 && str_starts_with((string) $component->getDirectory(), 'mail-attachments/');
         });
+});
+
+test('send uses a confirmed Filament action and notifies when the email is queued', function (): void {
+    $component = Livewire::test(ComposeEmail::class)->fillForm(composeValidState());
+
+    $component->callAction(TestAction::make('send')->schemaComponent('send-actions'));
+    $component->assertHasNoErrors();
+    $component->assertNotified(__('filament-cloudflare-mail-sender::messages.notifications.email_queued'));
+
+    expect(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Queued);
+    Queue::assertPushed(SendComposedEmail::class);
 });
 
 test('send persists one audit row, dispatches once, and resets the composer', function (): void {
@@ -387,15 +399,30 @@ test('send exposes invalid delivery configuration without losing form state', fu
 test('send exposes invalid queue configuration as an actionable error', function (): void {
     config()->set('filament-cloudflare-mail-sender.queue.name', null);
 
-    Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('sendEmail')
-        ->assertHasErrors(['send']);
+    $component = Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState());
+    $component->call('sendEmail');
+    $component->assertHasErrors(['send']);
+    $component->assertNotified(__('filament-cloudflare-mail-sender::messages.notifications.email_not_queued'));
 
     expect(CloudflareMailMessage::query()->count())->toBe(1)
         ->and(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Draft)
         ->and(CloudflareMailMessage::query()->sole()->send_token)->toBeNull();
     Queue::assertNothingPushed();
+});
+
+test('send queues successfully when the published package queue connection is null', function (): void {
+    config()->set('queue.default', 'sync');
+    config()->set('filament-cloudflare-mail-sender.queue.connection', null);
+
+    $component = Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState());
+    $component->call('sendEmail');
+    $component->assertHasNoErrors();
+    $component->assertNotified(__('filament-cloudflare-mail-sender::messages.notifications.email_queued'));
+
+    expect(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Queued);
+    Queue::assertPushed(SendComposedEmail::class);
 });
 
 test('send restores the draft and reports when queue dispatch fails', function (): void {
@@ -409,10 +436,11 @@ test('send restores the draft and reports when queue dispatch fails', function (
         throw new RuntimeException('The queue backend is unavailable.');
     });
 
-    Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('sendEmail')
-        ->assertHasErrors(['send']);
+    $component = Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState());
+    $component->call('sendEmail');
+    $component->assertHasErrors(['send']);
+    $component->assertNotified(__('filament-cloudflare-mail-sender::messages.notifications.email_not_queued'));
 
     $message = CloudflareMailMessage::query()->sole();
 

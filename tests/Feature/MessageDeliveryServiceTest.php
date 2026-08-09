@@ -145,6 +145,23 @@ test('it permits non-Cloudflare test transports without provider credentials', f
     Queue::assertPushed(SendComposedEmail::class);
 });
 
+test('it falls back to the application default queue connection when the package connection is unset', function (): void {
+    Queue::fake();
+    config()->set('queue.default', 'sync');
+    config()->set('filament-cloudflare-mail-sender.queue.connection', null);
+    config()->set('filament-cloudflare-mail-sender.queue.name', 'mail-fallback');
+
+    $message = deliveryDraft();
+
+    resolve(MessageDeliveryService::class)->queueComposed($message);
+
+    expect($message->refresh()->status)->toBe(MessageStatus::Queued);
+
+    Queue::assertPushedOn('mail-fallback', SendComposedEmail::class, function (SendComposedEmail $job): bool {
+        return $job->connection === 'sync';
+    });
+});
+
 /**
  * @param  array<string, mixed>  $overrides
  */

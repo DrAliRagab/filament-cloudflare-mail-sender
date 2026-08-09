@@ -86,7 +86,7 @@ test('it enforces unique send tokens', function (): void {
 
 test('it exposes the approved queue and audit defaults', function (): void {
     expect(config('filament-cloudflare-mail-sender.queue'))->toBe([
-        'connection' => config('queue.default'),
+        'connection' => null,
         'name' => 'default',
         'tries' => 3,
         'backoff' => [60, 300, 900],

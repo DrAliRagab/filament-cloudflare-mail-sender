@@ -109,6 +109,15 @@ final readonly class MessageDeliveryService
     private function queueConfiguration(): array
     {
         $connection = config('filament-cloudflare-mail-sender.queue.connection');
+
+        if (! is_string($connection) || $connection === '') {
+            if ($connection !== null && $connection !== '') {
+                throw new InvalidMessageSnapshot('The configured queue connection and name are invalid.');
+            }
+
+            $connection = config('queue.default');
+        }
+
         $queue = config('filament-cloudflare-mail-sender.queue.name');
 
         if (! is_string($connection) || $connection === '' || ! is_string($queue) || $queue === '') {

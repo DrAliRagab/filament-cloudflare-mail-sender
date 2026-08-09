@@ -93,7 +93,7 @@ The published `filament-cloudflare-mail-sender.php` configuration will define th
 - `recipients.email_column`: defaults to `email`.
 - `recipients.name_column`: defaults to `name`.
 - `recipients.suggestion_limit`: defaults to `250`.
-- `queue.connection`: defaults to the host application's default queue connection.
+- `queue.connection`: null in package config, resolving at runtime to the host application's `queue.default` (avoids published-config load-order wiping the connection).
 - `queue.name`: defaults to `default`.
 - `queue.tries`: defaults to `3`.
 - `queue.backoff`: defaults to `[60, 300, 900]` seconds.
