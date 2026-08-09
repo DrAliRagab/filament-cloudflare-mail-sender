@@ -6,16 +6,8 @@ on:
 
 jobs:
   test:
-    name: PHP 8.4 (${{ matrix.dependencies }})
+    name: PHP 8.4
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - dependencies: lowest
-            composer-arguments: --prefer-lowest --prefer-stable
-          - dependencies: current
-            composer-arguments: --prefer-stable
     steps:
       - uses: actions/checkout@v4
 
@@ -25,5 +17,5 @@ jobs:
           coverage: pcov
           extensions: pdo_sqlite
 
-      - run: composer update --prefer-dist --no-interaction --no-progress ${{ matrix.composer-arguments }}
+      - run: composer update --prefer-dist --no-interaction --no-progress --prefer-stable
       - run: composer verify
