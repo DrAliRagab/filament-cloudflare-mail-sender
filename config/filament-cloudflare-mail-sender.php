@@ -67,7 +67,7 @@ return [
     'navigation' => [
         'compose_label' => 'Compose Email',
         'messages_label' => 'Sent Emails',
-        'group' => null,
+        'group' => 'Email',
         'icon' => 'heroicon-o-envelope',
         'sort' => null,
     ],

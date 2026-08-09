@@ -21,6 +21,12 @@ test('the plugin registers its compose page and read only audit resource', funct
         ->and($plugin->canViewAudit(new TestActor('actor-1')))->toBeTrue();
 });
 
+test('compose and sent emails share a default Filament navigation section', function (): void {
+    expect(config('filament-cloudflare-mail-sender.navigation.group'))->toBe('Email')
+        ->and(ComposeEmail::getNavigationGroup())->toBe('Email')
+        ->and(CloudflareMailMessageResource::getNavigationGroup())->toBe('Email');
+});
+
 test('host callbacks can independently restrict compose and audit access', function (): void {
     $plugin = FilamentCloudflareMailSenderPlugin::make()
         ->authorizeComposeUsing(static fn (Authenticatable $actor): bool => $actor->getAuthIdentifier() === 'composer')
