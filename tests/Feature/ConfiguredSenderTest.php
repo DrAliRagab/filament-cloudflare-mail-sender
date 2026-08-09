@@ -20,6 +20,10 @@ beforeEach(function (): void {
 test('package from defaults to editable so hosts must opt into a locked sender', function (): void {
     $defaults = require dirname(__DIR__, 2).'/config/filament-cloudflare-mail-sender.php';
 
+    if (! is_array($defaults) || ! is_array($defaults['from'] ?? null)) {
+        throw new LogicException('The package configuration must define a from array.');
+    }
+
     expect($defaults['from']['editable'])->toBeTrue()
         ->and(ConfiguredSender::editable())->toBeTrue();
 });

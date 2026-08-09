@@ -8,7 +8,7 @@
 
 ## Summary
 
-This package adds an email composer and sent-email audit area to a host application's Filament panel. Authorized panel users can compose transactional email with Filament's Markdown editor, select known users or enter arbitrary recipient addresses, preview the exact rendered message, and send it through Laravel 13's first-party Cloudflare Email Sending API transport.
+This package adds an email composer and sent-email audit area to a host application's Filament panel. Authorized panel users can compose transactional email with Filament's Markdown editor, select known users or enter arbitrary recipient addresses, and send it through Laravel 13's first-party Cloudflare Email Sending API transport.
 
 The package owns the Filament experience, rendering, queue orchestration, authorization hooks, and local audit records. Laravel owns the mail transport. Cloudflare owns delivery after accepting the API request.
 
@@ -18,7 +18,7 @@ The package owns the Filament experience, rendering, queue orchestration, author
 - Use Laravel Mail and Laravel's native Cloudflare REST API transport.
 - Default the sender from the host application's environment-backed Laravel mail configuration.
 - Suggest recipient addresses from the host application's user model while accepting valid raw email addresses.
-- Use one Markdown source for editing, preview, HTML delivery, and plain-text delivery.
+- Use one Markdown source for editing, HTML delivery, and plain-text delivery.
 - Queue sends safely, prevent duplicate submissions, and expose actionable failures.
 - Store a useful, access-controlled audit history of messages initiated through the package.
 - Ship with strict, reproducible package-quality gates modeled on the user's established Laravel repositories.
@@ -128,9 +128,9 @@ The page is a single responsive form with these sections:
 3. Subject.
 4. Filament `MarkdownEditor` body.
 5. Optional attachments.
-6. Actions for Save Draft, Preview, Send, and Discard.
+6. A single Send action with confirmation.
 
-The sender field is populated from Laravel configuration and read-only by default. CC and BCC remain collapsed until used. The interface displays the number of unique recipients and warns when an address appears in more than one recipient group.
+The sender fields are populated from Laravel / package configuration and are editable by default. CC and BCC remain collapsed until used. The interface displays the number of unique recipients and warns when an address appears in more than one recipient group.
 
 ### Recipient inputs
 
@@ -142,46 +142,34 @@ The combined unique To, CC, and BCC count may not exceed 50, matching Cloudflare
 
 The package does not store user foreign keys for recipients. This keeps audit snapshots accurate even when a user changes their email address or is deleted.
 
-### Markdown and preview
+### Markdown rendering
 
 Filament's `MarkdownEditor` is the only body editor. Its toolbar provides the rich editing experience while Markdown remains the canonical stored source.
 
-A package `MessageBodyRenderer` converts Markdown to HTML with unsafe embedded HTML stripped and unsafe links disabled. It also produces a readable plain-text alternative. Preview and sending call the same renderer so there is no separate preview template that can drift from delivery.
-
-Preview opens before sending and shows:
-
-- Sender and Reply-To.
-- To, CC, and BCC.
-- Subject.
-- Rendered HTML.
-- Plain-text alternative.
-- Attachment names, types, and sizes.
-
-The Send action requires confirmation from the preview state. Editing any delivery field invalidates the previous preview and requires a fresh preview.
+A package `MessageBodyRenderer` converts Markdown to HTML with unsafe embedded HTML stripped and unsafe links disabled. It also produces a readable plain-text alternative. Compose submission and queue delivery call the same renderer so rendered output cannot drift from what was queued.
 
 ## Delivery flow
 
-1. The panel user completes the form and opens Preview.
+1. The panel user completes the form and confirms **Send email**.
 2. The server validates configuration, authorization, recipients, Markdown, and attachments.
-3. Preview renders through `MessageBodyRenderer` without sending.
-4. On confirmation, the package creates or updates a local email record and assigns an immutable send token.
-5. The record transitions to `queued`, and a `SendComposedEmail` job is dispatched after the database transaction commits.
-6. The job obtains a database lock and proceeds only when the record is still `queued` or `sending` with the same send token.
-7. The job transitions the record to `sending` and constructs the package Mailable from the stored snapshot.
-8. The job calls `Mail::mailer(configured mailer)` and sends synchronously inside the queue worker. It applies To, CC, and BCC through Laravel Mail.
-9. When Laravel's Cloudflare transport returns successfully, the record transitions to `sent` with `sent_at`.
-10. Retryable transport failures are rethrown so the queue applies configured backoff. The final `failed()` hook records a sanitized exception class and message and transitions the record to `failed`.
+3. The package creates or updates a local email record from the submitted form and assigns an immutable send token.
+4. The record transitions to `queued`, and a `SendComposedEmail` job is dispatched after the database transaction commits.
+5. The job obtains a database lock and proceeds only when the record is still `queued` or `sending` with the same send token.
+6. The job transitions the record to `sending` and constructs the package Mailable from the stored snapshot.
+7. The job calls `Mail::mailer(configured mailer)` and sends synchronously inside the queue worker. It applies To, CC, and BCC through Laravel Mail.
+8. When Laravel's Cloudflare transport returns successfully, the record transitions to `sent` with `sent_at`.
+9. Retryable transport failures are rethrown so the queue applies configured backoff. The final `failed()` hook records a sanitized exception class and message and transitions the record to `failed`.
 
 The queue job, rather than a queued Mailable nested inside another queue operation, owns lifecycle tracking. This gives the package one retry boundary and one idempotency check.
 
 ## Status semantics
 
-- `draft`: saved locally and never submitted.
+- `draft`: internal pre-queue snapshot (not a user-managed draft UI).
 - `queued`: accepted for asynchronous processing.
 - `sending`: claimed by a worker for the current attempt.
 - `sent`: Laravel's Cloudflare transport received HTTP 200 from Cloudflare.
 - `failed`: all configured job attempts ended without a successful transport return.
-- `cancelled`: a draft or queued record was cancelled before a worker claimed it.
+- `cancelled`: a record was cancelled before a worker claimed it.
 
 `sent` must be labeled in UI help text as “Accepted by Cloudflare”. It must never be displayed as “Delivered”. Laravel's current Cloudflare transport reads the successful API response but does not attach its `message_id`, `delivered`, `queued`, or `permanent_bounces` values to the returned Symfony message.
 
@@ -212,7 +200,7 @@ Temporary attachment objects are deleted after a successful send or terminal fai
 - Registering the Filament plugin does not bypass panel authentication.
 - The package exposes one authorization callback for composing/sending and another for viewing audit history.
 - The default callbacks allow authenticated users who can access the configured Filament panel. Host applications can replace them with gates or role checks.
-- Server-side authorization runs for page access and every send, cancel, view, duplicate-as-draft, and prune action.
+- Server-side authorization runs for page access and every send, view, duplicate, and prune action.
 - Email addresses, headers, attachment names, and exception messages are escaped in panel output.
 - Markdown rendering strips raw HTML and unsafe links.
 - Attachment filenames are normalized, MIME types are validated, and total size is checked before persistence and again before delivery.
@@ -228,7 +216,7 @@ Because message bodies and recipient lists may contain personal or sensitive inf
 - A queue dispatch failure leaves the record in `draft` with an actionable UI error.
 - Transport exceptions are retried automatically according to the queue policy; the same record and send token remain authoritative across attempts.
 - A terminal queue failure records only a sanitized exception summary.
-- Retrying a terminally failed message is an explicit “Duplicate as draft” operation that creates a new record and send token; the package never silently reuses a terminal token.
+- Retrying a terminally failed message is an explicit “Duplicate” operation that prefills compose and creates a new record and send token on send; the package never silently reuses a terminal token.
 - A worker crash while a record is `sending` is recoverable: a subsequent attempt may reclaim the same send token, while overlapping workers cannot both send it.
 - The package cannot guarantee exactly-once delivery across the boundary where Cloudflare accepts a request but the worker crashes before persisting `sent`. Documentation will state this distributed-systems limitation rather than claim impossible guarantees.
 
@@ -271,8 +259,7 @@ Tests use Pest 5 and Orchestra Testbench 11 with an in-memory SQLite database wh
 - Suggestions from integer, UUID, and ULID-style user models.
 - Arbitrary recipient entry.
 - Sender default and lock behavior.
-- Preview parity with the Mailable's HTML and text output.
-- Save Draft, cancel, send confirmation, automatic queue retry, and duplicate-as-draft flows.
+- Send confirmation, automatic queue retry, and duplicate-prefill flows.
 - Audit resource authorization, filters, and sensitive output escaping.
 - Attachment validation and cleanup.
 
@@ -335,7 +322,7 @@ Implementation will include:
 The design is implemented only when all of these are true:
 
 - A host Laravel 13 / Filament 5 application can register the plugin without package-source edits.
-- An authorized panel user can compose Markdown email, use known or arbitrary recipients, preview it, and confirm a queued send.
+- An authorized panel user can compose Markdown email, use known or arbitrary recipients, and queue a send with one confirmed Send action.
 - Laravel's native Cloudflare API transport is the only production delivery transport implemented by the package.
 - The exact From, recipients, subject, HTML, text, and attachment metadata are auditable locally.
 - Draft, queued, sending, sent, failed, and cancelled states follow the documented meanings.

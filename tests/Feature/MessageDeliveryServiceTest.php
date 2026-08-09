@@ -8,7 +8,6 @@ use DrAliRagab\FilamentCloudflareMailSender\Exceptions\MessageDispatchFailed;
 use DrAliRagab\FilamentCloudflareMailSender\Jobs\SendComposedEmail;
 use DrAliRagab\FilamentCloudflareMailSender\Models\CloudflareMailMessage;
 use DrAliRagab\FilamentCloudflareMailSender\Support\MessageDeliveryService;
-use DrAliRagab\FilamentCloudflareMailSender\Support\MessageSnapshotFingerprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Testing\Fakes\QueueFake;
@@ -20,7 +19,7 @@ beforeEach(function (): void {
     config()->set('filament-cloudflare-mail-sender.queue.name', 'cloudflare-mail');
 });
 
-test('it atomically confirms a draft and dispatches one configured job after the transaction', function (): void {
+test('it atomically queues a composed message and dispatches one configured job after the transaction', function (): void {
     Queue::fake();
     $transactionLevels = [];
     deliveryQueueFake()->beforePushing(function () use (&$transactionLevels): void {
@@ -29,13 +28,13 @@ test('it atomically confirms a draft and dispatches one configured job after the
 
     $message = deliveryDraft();
 
-    resolve(MessageDeliveryService::class)->queue($message, deliveryFingerprint($message));
+    resolve(MessageDeliveryService::class)->queueComposed($message);
 
     $message->refresh();
     $token = $message->send_token;
 
     if (! is_string($token) || $token === '') {
-        throw new LogicException('The confirmed message must have a non-empty send token.');
+        throw new LogicException('The queued message must have a non-empty send token.');
     }
 
     expect($message->status)->toBe(MessageStatus::Queued)
@@ -50,17 +49,16 @@ test('it atomically confirms a draft and dispatches one configured job after the
     });
 });
 
-test('it leaves the first immutable token and dispatch count unchanged on duplicate confirmation', function (): void {
+test('it leaves the first immutable token and dispatch count unchanged on duplicate queue attempts', function (): void {
     Queue::fake();
     $message = deliveryDraft();
     $service = resolve(MessageDeliveryService::class);
 
-    $fingerprint = deliveryFingerprint($message);
-    $service->queue($message, $fingerprint);
+    $service->queueComposed($message);
     $firstToken = $message->refresh()->send_token;
     config()->set('mail.mailers.delivery-array', ['transport' => 'cloudflare']);
     config()->set('services.cloudflare', []);
-    $service->queue($message, $fingerprint);
+    $service->queueComposed($message);
 
     expect($message->refresh()->send_token)->toBe($firstToken)
         ->and($message->status)->toBe(MessageStatus::Queued);
@@ -68,13 +66,13 @@ test('it leaves the first immutable token and dispatch count unchanged on duplic
     Queue::assertPushedTimes(SendComposedEmail::class, 1);
 });
 
-test('it fails before mutation when confirmation runs inside a host transaction', function (): void {
+test('it fails before mutation when queueing runs inside a host transaction', function (): void {
     Queue::fake();
     $message = deliveryDraft();
     DB::beginTransaction();
 
     try {
-        expect(fn (): CloudflareMailMessage => resolve(MessageDeliveryService::class)->queue($message, deliveryFingerprint($message)))
+        expect(fn (): CloudflareMailMessage => resolve(MessageDeliveryService::class)->queueComposed($message))
             ->toThrow(LogicException::class, 'outside an existing database transaction');
     } finally {
         DB::rollBack();
@@ -94,7 +92,7 @@ test('it validates the authoritative locked row instead of a stale caller model'
 
     CloudflareMailMessage::query()->whereKey($staleCaller->id)->update(['mailer' => 'delivery-array']);
 
-    resolve(MessageDeliveryService::class)->queue($staleCaller, deliveryFingerprint($staleCaller->fresh() ?? $staleCaller));
+    resolve(MessageDeliveryService::class)->queueComposed($staleCaller);
 
     expect($staleCaller->refresh()->status)->toBe(MessageStatus::Queued)
         ->and($staleCaller->send_token)->not->toBeNull();
@@ -109,7 +107,7 @@ test('it restores the same draft when the queue push fails', function (): void {
 
     $message = deliveryDraft();
 
-    expect(fn (): CloudflareMailMessage => resolve(MessageDeliveryService::class)->queue($message, deliveryFingerprint($message)))
+    expect(fn (): CloudflareMailMessage => resolve(MessageDeliveryService::class)->queueComposed($message))
         ->toThrow(MessageDispatchFailed::class, 'could not be added');
 
     $message->refresh();
@@ -126,7 +124,7 @@ test('it validates native Cloudflare credentials before queueing', function (): 
 
     $message = deliveryDraft(['mailer' => 'delivery-cloudflare']);
 
-    expect(fn (): CloudflareMailMessage => resolve(MessageDeliveryService::class)->queue($message, deliveryFingerprint($message)))
+    expect(fn (): CloudflareMailMessage => resolve(MessageDeliveryService::class)->queueComposed($message))
         ->toThrow(InvalidMessageSnapshot::class, 'account ID and token');
 
     expect($message->refresh()->status)->toBe(MessageStatus::Draft)
@@ -141,24 +139,10 @@ test('it permits non-Cloudflare test transports without provider credentials', f
 
     $message = deliveryDraft();
 
-    resolve(MessageDeliveryService::class)->queue($message, deliveryFingerprint($message));
+    resolve(MessageDeliveryService::class)->queueComposed($message);
 
     expect($message->refresh()->status)->toBe(MessageStatus::Queued);
     Queue::assertPushed(SendComposedEmail::class);
-});
-
-test('it rejects a stale preview fingerprint while holding the authoritative row lock', function (): void {
-    Queue::fake();
-    $message = deliveryDraft();
-    $fingerprint = deliveryFingerprint($message);
-    $message->update(['subject' => 'Changed after preview']);
-
-    expect(fn (): CloudflareMailMessage => resolve(MessageDeliveryService::class)->queue($message, $fingerprint))
-        ->toThrow(InvalidMessageSnapshot::class, 'changed after preview');
-
-    expect($message->refresh()->status)->toBe(MessageStatus::Draft)
-        ->and($message->send_token)->toBeNull();
-    Queue::assertNothingPushed();
 });
 
 /**
@@ -193,9 +177,4 @@ function deliveryQueueFake(): QueueFake
     }
 
     return $queue;
-}
-
-function deliveryFingerprint(CloudflareMailMessage $message): string
-{
-    return resolve(MessageSnapshotFingerprint::class)->for($message);
 }

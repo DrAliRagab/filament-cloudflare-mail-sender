@@ -1,6 +1,6 @@
 # Filament Cloudflare Mail Sender
 
-A Filament panel package for composing, previewing, queueing, and auditing transactional email through Laravel's first-party Cloudflare Email Sending transport.
+A Filament panel package for composing, queueing, and auditing transactional email through Laravel's first-party Cloudflare Email Sending transport.
 
 The package supports PHP 8.4 within PHP 8.x, Laravel 13.23 or newer within Laravel 13, and Filament 5.1 or newer within Filament 5. It intentionally does not claim compatibility with other major versions.
 
@@ -52,7 +52,7 @@ Set the package mailer and Laravel's default sender in the published configurati
 
 Attachment uploads are optional. Set `attachments.enabled` to `false` to hide the upload UI and skip attachment disk requirements. When attachments stay enabled, `attachments.disk` falls back to Laravel's default filesystem disk at runtime.
 
-Sending is a two-step flow on the Compose Email page: **Preview email**, then **Queue email** in the preview panel. There is no separate Send button; queueing dispatches the package job through Laravel's mailer.
+Sending uses a single **Send email** action on the Compose Email page. That validates the form, stores the audit snapshot, and dispatches the package queue job through Laravel's mailer. Run the configured queue worker so messages actually leave via Cloudflare.
 
 ## Filament panel registration
 
@@ -96,7 +96,7 @@ The `recipients` configuration maps suggestions to a host Eloquent user model:
 
 Suggestions are conveniences, not an allowlist: authorized users may enter any valid email address. To, CC, and BCC are canonicalized and deduplicated across fields. Cloudflare currently permits at most 50 combined unique recipients, which the package validates before queueing.
 
-Filament's `MarkdownEditor` is the only message-body format. Save draft persists a private working record. Preview renders HTML and plain text through the same service used for delivery and shows the complete envelope plus attachment metadata. Queue email requires a fresh preview of that authoritative draft.
+Filament's `MarkdownEditor` is the only message-body format. **Send email** validates the form, renders HTML and plain text through the same Markdown service used for delivery, persists the audit snapshot, and queues the job. There is no separate save-draft or preview step.
 
 ## Queues and delivery semantics
 
@@ -106,7 +106,7 @@ Configure `queue.connection` and `queue.name`, then run a worker for that connec
 php artisan queue:work database --queue=mail
 ```
 
-The job defaults to three attempts with backoff intervals of 60, 300, and 900 seconds. Confirmation assigns one immutable send token under a database row lock. Duplicate confirmations and ordinary same-token retries cannot send concurrently, and queue dispatch occurs only after the package transaction commits.
+The job defaults to three attempts with backoff intervals of 60, 300, and 900 seconds. Send assigns one immutable send token under a database row lock. Duplicate sends against the same upload scope and ordinary same-token retries cannot send concurrently, and queue dispatch occurs only after the package transaction commits.
 
 A local `sent` status means **Accepted by Cloudflare**, not delivered. The native Laravel transport does not expose provider delivery state or a durable provider message ID to this package. There is also an unavoidable duplicate window if Cloudflare accepts a request but the worker crashes before the local transaction records success. Design downstream messages to tolerate that rare failure mode.
 

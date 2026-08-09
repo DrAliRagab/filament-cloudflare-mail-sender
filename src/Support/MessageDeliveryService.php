@@ -21,28 +21,23 @@ final readonly class MessageDeliveryService
     public function __construct(
         private DatabaseManager $database,
         private Dispatcher $dispatcher,
-        private MessageSnapshotFingerprint $fingerprints,
     ) {}
 
-    public function queue(CloudflareMailMessage $message, string $expectedFingerprint): CloudflareMailMessage
+    public function queueComposed(CloudflareMailMessage $message): CloudflareMailMessage
     {
         if ($this->database->connection()->transactionLevel() !== 0) {
-            throw new LogicException('Email confirmation must run outside an existing database transaction.');
+            throw new LogicException('Email queueing must run outside an existing database transaction.');
         }
 
         $shouldDispatch = false;
         $connection = null;
         $queue = null;
 
-        $lockedMessage = $this->database->transaction(function () use ($message, $expectedFingerprint, &$shouldDispatch, &$connection, &$queue): CloudflareMailMessage {
+        $lockedMessage = $this->database->transaction(function () use ($message, &$shouldDispatch, &$connection, &$queue): CloudflareMailMessage {
             $locked = CloudflareMailMessage::query()
                 ->whereKey($message->getKey())
                 ->lockForUpdate()
                 ->firstOrFail();
-
-            if (! hash_equals($expectedFingerprint, $this->fingerprints->for($locked))) {
-                throw new InvalidMessageSnapshot('The saved draft changed after preview. Preview the email again.');
-            }
 
             if ($locked->status !== MessageStatus::Draft || $locked->send_token !== null) {
                 return $locked;

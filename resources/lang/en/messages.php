@@ -34,28 +34,15 @@ return [
         'created_at' => 'Created',
     ],
     'actions' => [
-        'save_draft' => 'Save draft',
-        'preview' => 'Preview email',
-        'queue' => 'Queue email',
-        'queue_confirmation' => 'Queue this transactional email?',
-        'discard' => 'Discard draft',
-        'duplicate' => 'Duplicate as draft',
-    ],
-    'preview' => [
-        'heading' => 'Delivery memo',
-        'description' => 'Review the exact envelope, rendered message, fallback, and attachment ledger before queueing.',
-        'html' => 'HTML preview',
-        'text' => 'Plain-text fallback',
-        'attachments' => 'Attachment ledger',
-        'no_attachments' => 'No attachments.',
+        'send' => 'Send email',
+        'send_confirmation' => 'Send this transactional email to the queue?',
+        'duplicate' => 'Duplicate',
     ],
     'validation' => [
-        'stale_preview' => 'The message changed after preview. Preview the email again before queueing.',
-        'rate_limited' => 'Five emails have already been confirmed in the last minute. Wait before trying again.',
+        'rate_limited' => 'Five emails have already been sent in the last minute. Wait before trying again.',
         'reply_to_name_requires_address' => 'Enter a Reply-To address when using a Reply-To name.',
     ],
     'notifications' => [
-        'draft_saved' => 'Draft saved',
         'email_queued' => 'Email queued',
     ],
     'audit' => [

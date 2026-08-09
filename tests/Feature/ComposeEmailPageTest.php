@@ -11,7 +11,6 @@ use DrAliRagab\FilamentCloudflareMailSender\Filament\Pages\ComposeEmail;
 use DrAliRagab\FilamentCloudflareMailSender\FilamentCloudflareMailSenderPlugin;
 use DrAliRagab\FilamentCloudflareMailSender\Jobs\SendComposedEmail;
 use DrAliRagab\FilamentCloudflareMailSender\Models\CloudflareMailMessage;
-use DrAliRagab\FilamentCloudflareMailSender\Support\AuditBodyStoragePolicy;
 use DrAliRagab\FilamentCloudflareMailSender\Support\MessageSnapshotFactory;
 use DrAliRagab\FilamentCloudflareMailSender\Tests\Fixtures\TestActor;
 use Filament\Facades\Filament;
@@ -20,14 +19,11 @@ use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\TextInput;
 use Filament\Panel;
-use Illuminate\Filesystem\FilesystemAdapter;
-use Illuminate\Filesystem\FilesystemManager;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Testing\Fakes\QueueFake;
-use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
 use RuntimeException;
@@ -72,9 +68,14 @@ beforeEach(function (): void {
     Auth::guard('web')->setUser(new TestActor('composer-1'));
 });
 
-test('compose uses native Filament fields with configured defaults and upload policy', function (): void {
+test('compose exposes native fields and a single send action without draft or preview ceremony', function (): void {
     $component = Livewire::test(ComposeEmail::class);
     $component->assertOk();
+    $component->assertSee(__('filament-cloudflare-mail-sender::messages.actions.send'));
+    $component->assertDontSee('Save draft');
+    $component->assertDontSee('Preview email');
+    $component->assertDontSee('Discard draft');
+    $component->assertDontSee('Queue email');
     $component
         ->assertSchemaStateSet([
             'from_address' => 'sender@example.test',
@@ -86,446 +87,153 @@ test('compose uses native Filament fields with configured defaults and upload po
             'bcc' => [],
         ])
         ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && ! $component->isDisabled())
-        ->assertSchemaComponentExists('from_name', 'form', static fn (mixed $component): bool => $component instanceof TextInput && ! $component->isDisabled())
         ->assertSchemaComponentExists('to', 'form', static fn (mixed $component): bool => $component instanceof TagsInput && $component->getSuggestions() === ['Known User <known@example.test>'])
-        ->assertSchemaComponentExists('cc', 'form', static fn (mixed $component): bool => $component instanceof TagsInput)
-        ->assertSchemaComponentExists('bcc', 'form', static fn (mixed $component): bool => $component instanceof TagsInput)
         ->assertSchemaComponentExists('body', 'form', static fn (mixed $component): bool => $component instanceof MarkdownEditor)
         ->assertSchemaComponentExists('attachments', 'form', static function (mixed $component): bool {
             return $component instanceof FileUpload
                 && $component->isMultiple()
-                && $component->shouldPreserveFilenames()
                 && $component->getDiskName() === 'local'
-                && str_starts_with((string) $component->getDirectory(), 'mail-attachments/')
-                && $component->getMaxSize() === 2048;
+                && str_starts_with((string) $component->getDirectory(), 'mail-attachments/');
         });
 });
 
-test('compose persists an edited from address and name when sender editing is enabled', function (): void {
+test('send persists one audit row, dispatches once, and resets the composer', function (): void {
+    $component = Livewire::test(ComposeEmail::class);
+    $initialProof = $component->get('uploadScopeProof');
+
+    $component
+        ->fillForm(composeValidState([
+            'to' => ['Known User <known@example.test>', 'outside@example.test'],
+            'cc' => ['KNOWN@example.test'],
+        ]))
+        ->call('sendEmail')
+        ->assertHasNoErrors();
+
+    $message = CloudflareMailMessage::query()->sole();
+
+    expect($message->status)->toBe(MessageStatus::Queued)
+        ->and($message->to)->toBe(['known@example.test', 'outside@example.test'])
+        ->and($message->cc)->toBe([])
+        ->and($message->actor_id)->toBe('composer-1')
+        ->and($message->send_token)->not->toBeNull()
+        ->and($component->get('uploadScopeProof'))->not->toBe($initialProof)
+        ->and($component->get('data.subject'))->toBe('')
+        ->and($component->get('data.to'))->toBe([]);
+
+    Queue::assertPushedTimes(SendComposedEmail::class, 1);
+});
+
+test('send persists an edited from address and name when sender editing is enabled', function (): void {
     Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState([
             'from_address' => 'billing@example.test',
             'from_name' => 'Billing Desk',
         ]))
-        ->call('previewEmail')
-        ->assertHasNoErrors()
-        ->assertSet('preview.from', 'Billing Desk <billing@example.test>');
+        ->call('sendEmail')
+        ->assertHasNoErrors();
 
-    $draft = CloudflareMailMessage::query()->sole();
+    $message = CloudflareMailMessage::query()->sole();
 
-    expect($draft->from_address)->toBe('billing@example.test')
-        ->and($draft->from_name)->toBe('Billing Desk');
+    expect($message->from_address)->toBe('billing@example.test')
+        ->and($message->from_name)->toBe('Billing Desk')
+        ->and($message->status)->toBe(MessageStatus::Queued);
 });
 
-test('compose rejects an edited from address outside allowed sending domains', function (): void {
+test('send rejects an edited from address outside allowed sending domains', function (): void {
     Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState([
             'from_address' => 'attacker@untrusted.test',
             'from_name' => 'Attacker',
         ]))
-        ->call('previewEmail')
+        ->call('sendEmail')
         ->assertHasErrors(['data']);
 
     expect(CloudflareMailMessage::query()->count())->toBe(0);
+    Queue::assertNothingPushed();
 });
 
-test('compose rejects a blank from address while sender editing is enabled', function (): void {
+test('send rejects a blank from address while sender editing is enabled', function (): void {
     Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState([
             'from_address' => '',
             'from_name' => 'Nameless',
         ]))
-        ->call('previewEmail')
+        ->call('sendEmail')
         ->assertHasErrors(['data.from_address']);
 
     expect(CloudflareMailMessage::query()->count())->toBe(0);
 });
 
-test('compose rejects an invalid from address while sender editing is enabled', function (): void {
+test('send rejects an invalid from address while sender editing is enabled', function (): void {
     Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState([
             'from_address' => 'not-an-email',
             'from_name' => 'Broken',
         ]))
-        ->call('previewEmail')
+        ->call('sendEmail')
         ->assertHasErrors(['data.from_address']);
 
     expect(CloudflareMailMessage::query()->count())->toBe(0);
 });
 
-test('compose can clear from name while keeping a valid editable from address', function (): void {
+test('send can clear from name while keeping a valid editable from address', function (): void {
     Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState([
             'from_address' => 'billing@example.test',
             'from_name' => null,
         ]))
-        ->call('previewEmail')
-        ->assertHasNoErrors()
-        ->assertSet('preview.from', 'billing@example.test');
+        ->call('sendEmail')
+        ->assertHasNoErrors();
 
     expect(CloudflareMailMessage::query()->sole()->from_name)->toBeNull();
 });
 
-test('duplicate prefill copies the historical sender when from editing is enabled', function (): void {
-    $source = composeAuditMessage([
-        'from_address' => 'historical@example.test',
-        'from_name' => 'Historical Sender',
-    ]);
-
-    Livewire::withQueryParams(['duplicate' => $source->id]);
-    Livewire::test(ComposeEmail::class)
-        ->assertSchemaStateSet([
-            'from_address' => 'historical@example.test',
-            'from_name' => 'Historical Sender',
-        ]);
-});
-
-test('locked compose from fields fall back to Laravel mail.from when package from is empty', function (): void {
-    config()->set('filament-cloudflare-mail-sender.from', [
-        'address' => null,
-        'name' => null,
-        'editable' => false,
-        'allowed_domains' => [],
-    ]);
-    config()->set('mail.from', [
-        'address' => 'ops@example.test',
-        'name' => 'Operations',
-    ]);
-
-    Livewire::test(ComposeEmail::class)
-        ->assertOk()
-        ->assertSchemaStateSet([
-            'from_address' => 'ops@example.test',
-            'from_name' => 'Operations',
-        ])
-        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && $component->isDisabled())
-        ->assertSchemaComponentExists('from_name', 'form', static fn (mixed $component): bool => $component instanceof TextInput && $component->isDisabled());
-});
-
-test('locked compose prefers package from values over Laravel mail.from', function (): void {
+test('send ignores a forged sender when sender editing is locked', function (): void {
     config()->set('filament-cloudflare-mail-sender.from.editable', false);
-    config()->set('mail.from', [
-        'address' => 'mailer@example.test',
-        'name' => 'Mailer Default',
-    ]);
 
     Livewire::test(ComposeEmail::class)
-        ->assertSchemaStateSet([
-            'from_address' => 'sender@example.test',
-            'from_name' => 'Sender Team',
-        ])
-        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && $component->isDisabled());
-});
-
-test('compose access uses the plugin callback on every Livewire request', function (): void {
-    $panel = Panel::make()
-        ->id('restricted-mail')
-        ->default()
-        ->plugin(FilamentCloudflareMailSenderPlugin::make()
-            ->authorizeComposeUsing(static fn (): bool => false));
-    Filament::setCurrentPanel($panel);
-
-    Livewire::test(ComposeEmail::class)->assertForbidden();
-});
-
-test('save draft canonicalizes exact known labels and updates one current record', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState([
-            'to' => ['Known User <known@example.test>', 'outside@example.test'],
-            'cc' => ['KNOWN@example.test'],
+            'from_address' => 'attacker@untrusted.test',
+            'from_name' => 'Attacker',
         ]))
-        ->call('saveDraft')
-        ->assertHasNoFormErrors();
+        ->call('sendEmail')
+        ->assertHasNoErrors();
 
-    $draft = CloudflareMailMessage::query()->sole();
+    $message = CloudflareMailMessage::query()->sole();
 
-    expect($draft->status)->toBe(MessageStatus::Draft)
-        ->and($draft->to)->toBe(['known@example.test', 'outside@example.test'])
-        ->and($draft->cc)->toBe([])
-        ->and($draft->actor_id)->toBe('composer-1');
-
-    $component
-        ->fillForm(['subject' => 'Updated subject'])
-        ->call('saveDraft')
-        ->assertHasNoFormErrors();
-
-    expect(CloudflareMailMessage::query()->count())->toBe(1)
-        ->and($draft->refresh()->subject)->toBe('Updated subject');
+    expect($message->from_address)->toBe('sender@example.test')
+        ->and($message->from_name)->toBe('Sender Team');
 });
 
-test('invalid arbitrary recipient tags stay on compose without creating a draft', function (): void {
+test('invalid arbitrary recipient tags stay on compose without creating a message', function (): void {
     Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState(['to' => ['not-an-email']]))
-        ->call('saveDraft')
+        ->call('sendEmail')
         ->assertHasErrors(['data.to']);
 
     expect(CloudflareMailMessage::query()->count())->toBe(0);
-});
-
-test('preview uses the delivery renderer and any edit invalidates its proof', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState([
-            'body' => 'Hello **clinician**',
-            'cc' => ['copy@example.test'],
-            'bcc' => ['hidden@example.test'],
-        ]))
-        ->call('previewEmail')
-        ->assertSet('preview.from', 'Sender Team <sender@example.test>')
-        ->assertSet('preview.reply_to', 'Replies Team <replies@example.test>')
-        ->assertSet('preview.to', ['recipient@example.test'])
-        ->assertSet('preview.cc', ['copy@example.test'])
-        ->assertSet('preview.bcc', ['hidden@example.test'])
-        ->assertSet('preview.text', 'Hello clinician')
-        ->assertSet('preview.html', fn (string $html): bool => str_contains($html, '<strong>clinician</strong>'));
-
-    $previewProof = $component->get('previewProof');
-    expect($previewProof)->toBeString()
-        ->and($previewProof === '')->toBeFalse();
-
-    $component
-        ->set('data.subject', 'Changed after preview')
-        ->assertSet('previewProof', null)
-        ->call('queueEmail')
-        ->assertHasErrors(['preview']);
-
     Queue::assertNothingPushed();
 });
 
-test('preview clearly preserves an absent optional Reply-To', function (): void {
-    $component = Livewire::test(ComposeEmail::class);
-    $component->fillForm(composeValidState([
-        'reply_to_address' => null,
-        'reply_to_name' => null,
-    ]));
-    $component->call('previewEmail');
-    $component->assertHasNoErrors();
-    $component->assertSet('preview.reply_to', null);
-});
-
-test('compose requires a Reply-To address whenever a Reply-To name is present', function (): void {
+test('send requires a Reply-To address whenever a Reply-To name is present', function (): void {
     Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState([
             'reply_to_address' => null,
             'reply_to_name' => 'Support team',
         ]))
-        ->call('saveDraft')
+        ->call('sendEmail')
         ->assertHasErrors(['data.reply_to_name']);
 
     expect(CloudflareMailMessage::query()->count())->toBe(0);
 });
 
-test('save and preview expose invalid attachment policy configuration on the attachment field', function (string $action): void {
-    $component = Livewire::test(ComposeEmail::class)->fillForm(composeValidState());
-    config()->set('filament-cloudflare-mail-sender.attachments.max_file_kib', 'invalid');
-    app()->forgetInstance(AttachmentPolicy::class);
-    app()->forgetInstance(MessageSnapshotFactory::class);
-
-    $component
-        ->call($action)
-        ->assertHasErrors(['data.attachments']);
-
-    expect(CloudflareMailMessage::query()->count())->toBe(0);
-})->with([
-    'save' => 'saveDraft',
-    'preview' => 'previewEmail',
-]);
-
-test('preview succeeds when attachments are disabled even if the attachment disk is unset', function (): void {
-    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
-    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
-    app()->forgetInstance(AttachmentPolicy::class);
-    app()->forgetInstance(MessageSnapshotFactory::class);
-
-    Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('previewEmail')
-        ->assertHasNoErrors()
-        ->assertSet('preview.subject', 'Transactional update')
-        ->assertSet('preview.attachments', [])
-        ->assertSet('previewProof', fn (?string $proof): bool => is_string($proof) && $proof !== '');
-});
-
-test('preview rejects forged attachment paths when attachments are disabled', function (): void {
-    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
-    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
-    app()->forgetInstance(AttachmentPolicy::class);
-    app()->forgetInstance(MessageSnapshotFactory::class);
-
-    Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->set('data.attachments', ['mail-attachments/forged.pdf'])
-        ->set('data.attachment_names', ['mail-attachments/forged.pdf' => 'forged.pdf'])
-        ->call('previewEmail')
-        ->assertHasErrors(['data.attachments']);
-
-    expect(CloudflareMailMessage::query()->count())->toBe(0);
-});
-
-test('queue email action is available only after a successful preview', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->assertDontSee(__('filament-cloudflare-mail-sender::messages.actions.queue'))
-        ->call('previewEmail')
-        ->assertSee(__('filament-cloudflare-mail-sender::messages.actions.queue'));
-
-    $component->call('queueEmail')->assertHasNoErrors();
-
-    expect(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Queued);
-});
-
-test('save and preview expose invalid delivery configuration without losing form state', function (string $action): void {
-    $component = Livewire::test(ComposeEmail::class)->fillForm(composeValidState());
-    config()->set('filament-cloudflare-mail-sender.mailer', null);
-
-    $component->call($action);
-    $component->assertHasErrors(['data']);
-    $component->assertSet('data.subject', 'Transactional update');
-
-    expect(CloudflareMailMessage::query()->count())->toBe(0);
-})->with([
-    'save' => 'saveDraft',
-    'preview' => 'previewEmail',
-]);
-
-test('fresh confirmation queues once and duplicate confirmations remain idempotent', function (): void {
-    $component = Livewire::test(ComposeEmail::class);
-    $component
-        ->fillForm(composeValidState())
-        ->call('previewEmail')
-        ->call('queueEmail');
-    $component->assertHasNoErrors();
-
-    $message = CloudflareMailMessage::query()->sole();
-
-    expect($message->status)->toBe(MessageStatus::Queued)
-        ->and($message->send_token)->not->toBeNull();
-
-    Queue::assertPushedTimes(SendComposedEmail::class, 1);
-
-    $component->call('queueEmail');
-    $component->assertHasNoErrors();
-
-    expect(CloudflareMailMessage::query()->count())->toBe(1);
-    Queue::assertPushedTimes(SendComposedEmail::class, 1);
-});
-
-test('confirmation is limited to five attempts per actor per minute', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('previewEmail');
-
-    foreach (range(1, 5) as $_) {
-        RateLimiter::hit(composeRateKey('composer-1'), 60);
-    }
-
-    $component
-        ->call('queueEmail')
-        ->assertHasErrors(['preview']);
-
-    expect(CloudflareMailMessage::query()->count())->toBe(1)
-        ->and(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Draft);
-    Queue::assertNothingPushed();
-});
-
-test('discard cancels the current draft and clears composer identity', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('saveDraft');
-
-    $draft = CloudflareMailMessage::query()->sole();
-
-    $component
-        ->call('discardDraft')
-        ->assertSet('currentDraftId', null)
-        ->assertSet('previewProof', null);
-
-    expect($draft->refresh()->status)->toBe(MessageStatus::Cancelled)
-        ->and($draft->cancelled_at)->not->toBeNull();
-});
-
-test('discard keeps a concurrently queued draft and reports the terminal conflict', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('saveDraft');
-    $draft = CloudflareMailMessage::query()->sole();
-    $draft->forceFill([
-        'status' => MessageStatus::Queued,
-        'send_token' => 'concurrent-send-token',
-    ])->save();
-
-    $component->call('discardDraft');
-    $component->assertHasErrors(['data']);
-    $component->assertSet('currentDraftId', $draft->id);
-
-    expect($draft->refresh()->status)->toBe(MessageStatus::Queued);
-});
-
-test('a losing save cleans only untracked files after the authoritative draft is queued', function (): void {
-    $component = Livewire::test(ComposeEmail::class);
-    $directory = composeUploadDirectory($component);
-    $queuedPath = $directory.'/queued.pdf';
-    $losingPath = $directory.'/losing-save.pdf';
-    $foreignPath = 'mail-attachments/foreign/scope/untouched.pdf';
-    Storage::disk('local')->put($queuedPath, "%PDF-1.4\nQueued");
-    Storage::disk('local')->put($foreignPath, "%PDF-1.4\nForeign");
-    $component
-        ->fillForm(composeValidState([
-            'attachments' => [$queuedPath],
-            'attachment_names' => [$queuedPath => 'queued.pdf'],
-        ]))
-        ->call('saveDraft');
-
-    $queued = CloudflareMailMessage::query()->sole();
-    $sendToken = 'concurrent-queue-token';
-    $queued->forceFill([
-        'status' => MessageStatus::Queued,
-        'send_token' => $sendToken,
-        'queued_at' => now(),
-    ])->save();
-    Storage::disk('local')->put($losingPath, "%PDF-1.4\nLosing save");
-
-    $component
-        ->fillForm(composeValidState([
-            'subject' => 'Losing content',
-            'body' => 'Losing body',
-            'attachments' => [$losingPath],
-            'attachment_names' => [$losingPath => 'losing-save.pdf'],
-        ]))
-        ->call('saveDraft')
-        ->assertHasErrors(['data']);
-
-    $queued->refresh();
-
-    expect(Storage::disk('local')->exists($losingPath))->toBeFalse()
-        ->and(Storage::disk('local')->exists($queuedPath))->toBeTrue()
-        ->and(Storage::disk('local')->exists($foreignPath))->toBeTrue()
-        ->and($queued->subject)->toBe('Transactional update')
-        ->and($queued->markdown_body)->toBe('Hello **recipient**')
-        ->and($queued->attachments)->toHaveCount(1)
-        ->and($queued->attachments[0]['path'])->toBe($queuedPath)
-        ->and($queued->status)->toBe(MessageStatus::Queued)
-        ->and($queued->send_token)->toBe($sendToken);
-});
-
-test('compose navigation falls back safely for invalid package configuration', function (): void {
-    config()->set('filament-cloudflare-mail-sender.navigation', [
-        'compose_label' => '',
-        'group' => 123,
-        'icon' => false,
-        'sort' => '31',
-    ]);
-
-    expect(ComposeEmail::getNavigationLabel())->toBe('Compose Email')
-        ->and(ComposeEmail::getNavigationGroup())->toBeNull()
-        ->and(ComposeEmail::getNavigationIcon())->toBeNull()
-        ->and(ComposeEmail::getNavigationSort())->toBeNull();
-});
-
-test('duplicate prefill copies message fields without attachments draft identity or send token', function (): void {
+test('duplicate prefill copies message fields without attachments or send token', function (): void {
     $source = composeAuditMessage([
         'to' => ['source@example.test'],
         'subject' => 'Source subject',
         'markdown_body' => 'Source body',
+        'from_address' => 'historical@example.test',
+        'from_name' => 'Historical Sender',
         'attachments' => [[
             'disk' => 'local',
             'path' => 'deleted.pdf',
@@ -544,14 +252,14 @@ test('duplicate prefill copies message fields without attachments draft identity
             'to' => ['source@example.test'],
             'subject' => 'Source subject',
             'body' => 'Source body',
+            'from_address' => 'historical@example.test',
+            'from_name' => 'Historical Sender',
             'attachments' => [],
             'attachment_names' => [],
-        ])
-        ->assertSet('currentDraftId', null)
-        ->assertSet('previewProof', null);
+        ]);
 });
 
-test('duplicate prefill keeps the current configured sender when from editing is locked', function (): void {
+test('duplicate prefill keeps the configured sender when from editing is locked', function (): void {
     config()->set('filament-cloudflare-mail-sender.from.editable', false);
 
     $source = composeAuditMessage([
@@ -567,7 +275,38 @@ test('duplicate prefill keeps the current configured sender when from editing is
         ]);
 });
 
-test('compose actions recheck authorization after the page was mounted', function (): void {
+test('locked compose from fields fall back to Laravel mail.from when package from is empty', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from', [
+        'address' => null,
+        'name' => null,
+        'editable' => false,
+        'allowed_domains' => [],
+    ]);
+    config()->set('mail.from', [
+        'address' => 'ops@example.test',
+        'name' => 'Operations',
+    ]);
+
+    Livewire::test(ComposeEmail::class)
+        ->assertSchemaStateSet([
+            'from_address' => 'ops@example.test',
+            'from_name' => 'Operations',
+        ])
+        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && $component->isDisabled());
+});
+
+test('compose access uses the plugin callback on every Livewire request', function (): void {
+    $panel = Panel::make()
+        ->id('restricted-mail')
+        ->default()
+        ->plugin(FilamentCloudflareMailSenderPlugin::make()
+            ->authorizeComposeUsing(static fn (): bool => false));
+    Filament::setCurrentPanel($panel);
+
+    Livewire::test(ComposeEmail::class)->assertForbidden();
+});
+
+test('send actions recheck authorization after the page was mounted', function (): void {
     $allowed = true;
     $plugin = FilamentCloudflareMailSenderPlugin::make()
         ->authorizeComposeUsing(static function () use (&$allowed): bool {
@@ -581,102 +320,85 @@ test('compose actions recheck authorization after the page was mounted', functio
 
     $allowed = false;
 
-    $component->call('saveDraft')->assertForbidden();
+    $component->call('sendEmail')->assertForbidden();
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+    Queue::assertNothingPushed();
+});
+
+test('send is limited to five attempts per actor per minute', function (): void {
+    $component = Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState());
+
+    foreach (range(1, 5) as $_) {
+        RateLimiter::hit(composeRateKey('composer-1'), 60);
+    }
+
+    $component
+        ->call('sendEmail')
+        ->assertHasErrors(['send']);
+
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+    Queue::assertNothingPushed();
+});
+
+test('a second send after success uses a new scope and does not double-dispatch the first message', function (): void {
+    $component = Livewire::test(ComposeEmail::class);
+    $component->fillForm(composeValidState());
+    $component->call('sendEmail');
+    $component->assertHasNoErrors();
+
+    $first = CloudflareMailMessage::query()->sole();
+    $firstToken = $first->send_token;
+
+    $component->fillForm(composeValidState(['subject' => 'Second message']));
+    $component->call('sendEmail');
+    $component->assertHasNoErrors();
+
+    expect(CloudflareMailMessage::query()->count())->toBe(2)
+        ->and($first->refresh()->send_token)->toBe($firstToken);
+
+    Queue::assertPushedTimes(SendComposedEmail::class, 2);
+});
+
+test('send exposes invalid attachment policy configuration on the attachment field', function (): void {
+    $component = Livewire::test(ComposeEmail::class)->fillForm(composeValidState());
+    config()->set('filament-cloudflare-mail-sender.attachments.max_file_kib', 'invalid');
+    app()->forgetInstance(AttachmentPolicy::class);
+    app()->forgetInstance(MessageSnapshotFactory::class);
+
+    $component
+        ->call('sendEmail')
+        ->assertHasErrors(['data.attachments']);
+
     expect(CloudflareMailMessage::query()->count())->toBe(0);
 });
 
-test('preview persists one authoritative draft before confirmation', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('previewEmail')
-        ->assertSet('currentDraftId', fn (?string $id): bool => is_string($id) && $id !== '')
-        ->assertSet('previewProof', fn (?string $proof): bool => is_string($proof) && $proof !== '');
+test('send exposes invalid delivery configuration without losing form state', function (): void {
+    $component = Livewire::test(ComposeEmail::class)->fillForm(composeValidState());
+    config()->set('filament-cloudflare-mail-sender.mailer', null);
 
-    $draft = CloudflareMailMessage::query()->sole();
+    $component->call('sendEmail');
+    $component->assertHasErrors(['data']);
+    $component->assertSet('data.subject', 'Transactional update');
 
-    expect($draft->status)->toBe(MessageStatus::Draft)
-        ->and($component->get('currentDraftId'))->toBe($draft->id);
-
-    $component->call('queueEmail');
-
-    expect(CloudflareMailMessage::query()->count())->toBe(1);
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
 });
 
-test('preview ignores a forged sender when sender editing is locked', function (): void {
-    config()->set('filament-cloudflare-mail-sender.from.editable', false);
-
-    Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState([
-            'from_address' => 'attacker@untrusted.test',
-            'from_name' => 'Attacker',
-        ]))
-        ->call('previewEmail')
-        ->assertSet('preview.from', 'Sender Team <sender@example.test>');
-
-    $draft = CloudflareMailMessage::query()->sole();
-
-    expect($draft->from_address)->toBe('sender@example.test')
-        ->and($draft->from_name)->toBe('Sender Team');
-});
-
-test('preview accepts an edited sender when editing is enabled and the domain is allowed', function (): void {
-    Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState([
-            'from_address' => 'support@example.test',
-            'from_name' => 'Support',
-        ]))
-        ->call('previewEmail')
-        ->assertHasNoErrors()
-        ->assertSet('preview.from', 'Support <support@example.test>');
-});
-
-test('queue rejects a forged preview proof', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('previewEmail');
-
-    $component
-        ->set('previewProof', 'forged-client-proof')
-        ->call('queueEmail')
-        ->assertHasErrors(['preview']);
-
-    expect(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Draft);
-    Queue::assertNothingPushed();
-});
-
-test('queue rejects a valid proof after the authoritative draft changes', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('previewEmail');
-
-    CloudflareMailMessage::query()->sole()->update(['subject' => 'Changed concurrently']);
-
-    $component
-        ->call('queueEmail')
-        ->assertHasErrors(['preview']);
-
-    expect(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Draft);
-    Queue::assertNothingPushed();
-});
-
-test('queue configuration failures are returned as actionable preview validation', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('previewEmail');
+test('send exposes invalid queue configuration as an actionable error', function (): void {
     config()->set('filament-cloudflare-mail-sender.queue.name', null);
 
-    $component
-        ->call('queueEmail')
-        ->assertHasErrors(['preview']);
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState())
+        ->call('sendEmail')
+        ->assertHasErrors(['send']);
 
-    expect(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Draft);
+    expect(CloudflareMailMessage::query()->count())->toBe(1)
+        ->and(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Draft)
+        ->and(CloudflareMailMessage::query()->sole()->send_token)->toBeNull();
     Queue::assertNothingPushed();
 });
 
-test('queue dispatch failures are actionable and restore the authoritative draft', function (): void {
-    $component = Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState())
-        ->call('previewEmail');
+test('send restores the draft and reports when queue dispatch fails', function (): void {
     $queue = Queue::getFacadeRoot();
 
     if (! $queue instanceof QueueFake) {
@@ -684,35 +406,52 @@ test('queue dispatch failures are actionable and restore the authoritative draft
     }
 
     $queue->beforePushing(static function (): never {
-        throw new RuntimeException('Queue unavailable.');
+        throw new RuntimeException('The queue backend is unavailable.');
     });
 
-    $component
-        ->call('queueEmail')
-        ->assertHasErrors(['preview']);
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState())
+        ->call('sendEmail')
+        ->assertHasErrors(['send']);
 
-    $draft = CloudflareMailMessage::query()->sole();
+    $message = CloudflareMailMessage::query()->sole();
 
-    expect($draft->status)->toBe(MessageStatus::Draft)
-        ->and($draft->send_token)->toBeNull()
-        ->and($draft->queued_at)->toBeNull();
+    expect($message->status)->toBe(MessageStatus::Draft)
+        ->and($message->send_token)->toBeNull();
 });
 
-test('discard cannot cancel a draft owned by another actor', function (): void {
-    $otherDraft = composeAuditMessage([
-        'actor_type' => TestActor::class,
-        'actor_id' => 'other-actor',
-    ]);
-    $component = Livewire::test(ComposeEmail::class);
+test('send succeeds when attachments are disabled even if the attachment disk is unset', function (): void {
+    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
+    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+    app()->forgetInstance(AttachmentPolicy::class);
+    app()->forgetInstance(MessageSnapshotFactory::class);
 
-    expect(fn () => $component->set('currentDraftId', $otherDraft->id))
-        ->toThrow(CannotUpdateLockedPropertyException::class);
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState())
+        ->call('sendEmail')
+        ->assertHasNoErrors();
 
-    expect($otherDraft->refresh()->status)->toBe(MessageStatus::Draft)
-        ->and($otherDraft->cancelled_at)->toBeNull();
+    expect(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Queued)
+        ->and(CloudflareMailMessage::query()->sole()->attachments)->toBe([]);
 });
 
-test('preview accepts an attachment only from the exact actor-owned page scope', function (): void {
+test('send rejects forged attachment paths when attachments are disabled', function (): void {
+    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
+    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+    app()->forgetInstance(AttachmentPolicy::class);
+    app()->forgetInstance(MessageSnapshotFactory::class);
+
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState())
+        ->set('data.attachments', ['mail-attachments/forged.pdf'])
+        ->set('data.attachment_names', ['mail-attachments/forged.pdf' => 'forged.pdf'])
+        ->call('sendEmail')
+        ->assertHasErrors(['data.attachments']);
+
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+});
+
+test('send accepts an attachment only from the exact actor-owned page scope', function (): void {
     $component = Livewire::test(ComposeEmail::class);
     $path = composeUploadDirectory($component).'/invoice.pdf';
     Storage::disk('local')->put($path, "%PDF-1.4\nOwned invoice");
@@ -722,11 +461,64 @@ test('preview accepts an attachment only from the exact actor-owned page scope',
             'attachments' => [$path],
             'attachment_names' => [$path => 'invoice.pdf'],
         ]))
-        ->call('previewEmail')
+        ->call('sendEmail')
         ->assertHasNoErrors();
 
     expect(CloudflareMailMessage::query()->sole()->attachments[0]['path'])->toBe($path);
 });
+
+test('send prunes stray files from the verified scope that never entered the message ledger', function (): void {
+    $component = Livewire::test(ComposeEmail::class);
+    $directory = composeUploadDirectory($component);
+    $keptPath = $directory.'/kept.pdf';
+    $strayPath = $directory.'/removed-before-validation.pdf';
+    Storage::disk('local')->put($keptPath, "%PDF-1.4\nKept");
+    Storage::disk('local')->put($strayPath, "%PDF-1.4\nStray");
+
+    $component
+        ->fillForm(composeValidState([
+            'attachments' => [$keptPath],
+            'attachment_names' => [$keptPath => 'kept.pdf'],
+        ]))
+        ->call('sendEmail')
+        ->assertHasNoErrors();
+
+    expect(Storage::disk('local')->exists($keptPath))->toBeTrue()
+        ->and(Storage::disk('local')->exists($strayPath))->toBeFalse();
+});
+
+test('one compose page cannot claim another page upload scope for the same actor', function (): void {
+    $firstPage = Livewire::test(ComposeEmail::class);
+    $foreignPath = composeUploadDirectory($firstPage).'/private.pdf';
+    Storage::disk('local')->put($foreignPath, "%PDF-1.4\nPrivate");
+
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState([
+            'attachments' => [$foreignPath],
+            'attachment_names' => [$foreignPath => 'private.pdf'],
+        ]))
+        ->call('sendEmail')
+        ->assertHasErrors(['data.attachments']);
+
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+});
+
+test('send rejects arbitrary and other-scope attachment paths under the configured disk', function (string $path): void {
+    Storage::disk('local')->put($path, "%PDF-1.4\nSensitive");
+
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState([
+            'attachments' => [$path],
+            'attachment_names' => [$path => 'sensitive.pdf'],
+        ]))
+        ->call('sendEmail')
+        ->assertHasErrors(['data.attachments']);
+
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+})->with([
+    'outside configured root' => 'private/sensitive.pdf',
+    'different upload scope' => 'mail-attachments/another-actor/another-scope/sensitive.pdf',
+]);
 
 test('the FileUpload delete callback removes an unpersisted file only from its verified page scope', function (): void {
     $component = Livewire::test(ComposeEmail::class);
@@ -745,191 +537,22 @@ test('the FileUpload delete callback removes an unpersisted file only from its v
         ->and(Storage::disk('local')->exists($foreignPath))->toBeTrue();
 });
 
-test('the FileUpload delete boundary refuses a client-supplied foreign-scope path', function (): void {
-    $component = Livewire::test(ComposeEmail::class);
-    $foreignPath = 'mail-attachments/foreign/scope/untouched.pdf';
-    Storage::disk('local')->put($foreignPath, "%PDF-1.4\nForeign");
-    $component->fillForm([
-        'attachments' => [$foreignPath],
-        'attachment_names' => [$foreignPath => 'untouched.pdf'],
+test('compose navigation falls back safely for invalid package configuration', function (): void {
+    config()->set('filament-cloudflare-mail-sender.navigation', [
+        'compose_label' => '',
+        'group' => 123,
+        'icon' => false,
+        'sort' => '31',
     ]);
-    composeAttachmentField($component)->deleteUploadedFile('0');
 
-    expect(Storage::disk('local')->exists($foreignPath))->toBeTrue()
-        ->and($component->get('data.attachments'))->toBe([$foreignPath]);
+    expect(ComposeEmail::getNavigationLabel())->toBe('Compose Email')
+        ->and(ComposeEmail::getNavigationGroup())->toBeNull()
+        ->and(ComposeEmail::getNavigationIcon())->toBeNull()
+        ->and(ComposeEmail::getNavigationSort())->toBeNull();
 });
 
-test('one compose page cannot claim another page upload scope for the same actor', function (): void {
-    $firstPage = Livewire::test(ComposeEmail::class);
-    $foreignPath = composeUploadDirectory($firstPage).'/private.pdf';
-    Storage::disk('local')->put($foreignPath, "%PDF-1.4\nPrivate");
-
-    Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState([
-            'attachments' => [$foreignPath],
-            'attachment_names' => [$foreignPath => 'private.pdf'],
-        ]))
-        ->call('previewEmail')
-        ->assertHasErrors(['data.attachments']);
-
-    expect(CloudflareMailMessage::query()->count())->toBe(0);
-});
-
-test('saving removes only files deleted from the current draft attachment ledger', function (): void {
-    $component = Livewire::test(ComposeEmail::class);
-    $directory = composeUploadDirectory($component);
-    $removedPath = $directory.'/removed.pdf';
-    $keptPath = $directory.'/kept.pdf';
-    Storage::disk('local')->put($removedPath, "%PDF-1.4\nRemoved");
-    Storage::disk('local')->put($keptPath, "%PDF-1.4\nKept");
-
-    $component
-        ->fillForm(composeValidState([
-            'attachments' => [$removedPath, $keptPath],
-            'attachment_names' => [$removedPath => 'removed.pdf', $keptPath => 'kept.pdf'],
-        ]))
-        ->call('saveDraft')
-        ->fillForm([
-            'attachments' => [$keptPath],
-            'attachment_names' => [$keptPath => 'kept.pdf'],
-        ])
-        ->call('saveDraft')
-        ->assertHasNoErrors();
-
-    expect(Storage::disk('local')->exists($removedPath))->toBeFalse()
-        ->and(Storage::disk('local')->exists($keptPath))->toBeTrue();
-});
-
-test('saving prunes stray files from the verified scope that never entered the draft ledger', function (): void {
-    $component = Livewire::test(ComposeEmail::class);
-    $directory = composeUploadDirectory($component);
-    $keptPath = $directory.'/kept.pdf';
-    $strayPath = $directory.'/removed-before-validation.pdf';
-    Storage::disk('local')->put($keptPath, "%PDF-1.4\nKept");
-    Storage::disk('local')->put($strayPath, "%PDF-1.4\nStray");
-
-    $component
-        ->fillForm(composeValidState([
-            'attachments' => [$keptPath],
-            'attachment_names' => [$keptPath => 'kept.pdf'],
-        ]))
-        ->call('saveDraft')
-        ->assertHasNoErrors();
-
-    expect(Storage::disk('local')->exists($keptPath))->toBeTrue()
-        ->and(Storage::disk('local')->exists($strayPath))->toBeFalse();
-});
-
-test('discard enumerates the exact verified scope so untracked uploads are cleaned', function (): void {
-    $component = Livewire::test(ComposeEmail::class);
-    $directory = composeUploadDirectory($component);
-    $untrackedPath = $directory.'/never-in-form.pdf';
-    $foreignPath = 'mail-attachments/foreign/scope/keep.pdf';
-    Storage::disk('local')->put($untrackedPath, "%PDF-1.4\nUntracked");
-    Storage::disk('local')->put($foreignPath, "%PDF-1.4\nForeign");
-
-    $component->call('discardDraft')->assertHasNoErrors();
-
-    expect(Storage::disk('local')->exists($untrackedPath))->toBeFalse()
-        ->and(Storage::disk('local')->exists($foreignPath))->toBeTrue();
-});
-
-test('discard cleans saved and unsaved owned uploads without deleting a foreign path and scrubs cancelled bodies', function (): void {
-    config()->set('filament-cloudflare-mail-sender.audit.store_body', false);
-    app()->forgetInstance(AuditBodyStoragePolicy::class);
-    $component = Livewire::test(ComposeEmail::class);
-    $directory = composeUploadDirectory($component);
-    $savedPath = $directory.'/saved.pdf';
-    $unsavedPath = $directory.'/unsaved.pdf';
-    $foreignPath = 'mail-attachments/foreign/scope/keep.pdf';
-    Storage::disk('local')->put($savedPath, "%PDF-1.4\nSaved");
-    Storage::disk('local')->put($unsavedPath, "%PDF-1.4\nUnsaved");
-    Storage::disk('local')->put($foreignPath, "%PDF-1.4\nForeign");
-
-    $component
-        ->fillForm(composeValidState([
-            'attachments' => [$savedPath],
-            'attachment_names' => [$savedPath => 'saved.pdf'],
-        ]))
-        ->call('saveDraft');
-
-    $draft = CloudflareMailMessage::query()->sole();
-
-    $component
-        ->fillForm([
-            'attachments' => [$unsavedPath, $foreignPath],
-            'attachment_names' => [$unsavedPath => 'unsaved.pdf', $foreignPath => 'keep.pdf'],
-        ])
-        ->call('discardDraft')
-        ->assertHasNoErrors();
-
-    $draft->refresh();
-
-    expect(Storage::disk('local')->exists($savedPath))->toBeFalse()
-        ->and(Storage::disk('local')->exists($unsavedPath))->toBeFalse()
-        ->and(Storage::disk('local')->exists($foreignPath))->toBeTrue()
-        ->and($draft->status)->toBe(MessageStatus::Cancelled)
-        ->and($draft->markdown_body)->toBeNull()
-        ->and($draft->html_body)->toBeNull()
-        ->and($draft->text_body)->toBeNull();
-});
-
-test('a failed discard cleanup keeps the draft and composer retryable until deletion succeeds', function (): void {
-    $component = Livewire::test(ComposeEmail::class);
-    $path = composeUploadDirectory($component).'/retry.pdf';
-    Storage::disk('local')->put($path, "%PDF-1.4\nRetry");
-    $component
-        ->fillForm(composeValidState([
-            'attachments' => [$path],
-            'attachment_names' => [$path => 'retry.pdf'],
-        ]))
-        ->call('saveDraft');
-    $draft = CloudflareMailMessage::query()->sole();
-    $realDisk = Storage::disk('local');
-    $filesystems = resolve(FilesystemManager::class);
-    $filesystems->set('local', new class($realDisk->getDriver(), $realDisk->getAdapter(), $realDisk->getConfig()) extends FilesystemAdapter
-    {
-        /** @param string|array<int, string> $paths */
-        public function delete($paths): bool
-        {
-            return false;
-        }
-    });
-
-    $component->call('discardDraft');
-    $component->assertHasErrors(['data.attachments']);
-    $component->assertSet('currentDraftId', $draft->id);
-
-    expect($draft->refresh()->status)->toBe(MessageStatus::Draft)
-        ->and($realDisk->exists($path))->toBeTrue();
-
-    $filesystems->set('local', $realDisk);
-    $component->call('discardDraft');
-    $component->assertHasNoErrors();
-    $component->assertSet('currentDraftId', null);
-
-    expect($draft->refresh()->status)->toBe(MessageStatus::Cancelled)
-        ->and($realDisk->exists($path))->toBeFalse();
-});
-
-test('preview rejects arbitrary and other-scope attachment paths under the configured disk', function (string $path): void {
-    Storage::disk('local')->put($path, "%PDF-1.4\nSensitive");
-
-    Livewire::test(ComposeEmail::class)
-        ->fillForm(composeValidState([
-            'attachments' => [$path],
-            'attachment_names' => [$path => 'sensitive.pdf'],
-        ]))
-        ->call('previewEmail')
-        ->assertHasErrors(['data.attachments']);
-
-    expect(CloudflareMailMessage::query()->count())->toBe(0);
-})->with([
-    'outside configured root' => 'private/sensitive.pdf',
-    'different upload scope' => 'mail-attachments/another-actor/another-scope/sensitive.pdf',
-]);
-
-/** @param array<string, mixed> $overrides
+/**
+ * @param  array<string, mixed>  $overrides
  * @return array<string, mixed>
  */
 function composeValidState(array $overrides = []): array

@@ -6,7 +6,7 @@ The approved design and implementation plan have been built. Maintain the packag
 
 ## Purpose
 
-Maintain a reusable Laravel 13 and Filament 5 package that lets authorized panel users compose, preview, queue, send, and audit transactional email through Laravel's first-party Cloudflare Email Sending API transport.
+Maintain a reusable Laravel 13 and Filament 5 package that lets authorized panel users compose, queue, send, and audit transactional email through Laravel's first-party Cloudflare Email Sending API transport.
 
 The package must use Laravel's native `cloudflare` mail transport. Do not implement, wrap, replace, or duplicate `Illuminate\Mail\Transport\CloudflareTransport` unless a future user request explicitly changes this decision.
 
@@ -30,17 +30,17 @@ Do not broaden framework compatibility without current dependency evidence and a
 - Resolve Cloudflare credentials through Laravel's supported `services.cloudflare` configuration.
 - Default the From address and name from Laravel's `mail.from` configuration. Do not read `env()` outside configuration files.
 - Use Filament's `MarkdownEditor` as the message body editor. It is the rich editing experience; do not introduce Filament `RichEditor` as a second body format.
-- Render preview and delivery through the same Markdown rendering service.
+- Render delivery HTML and plain text through the same Markdown rendering service used when the compose form is submitted.
 - Use To, CC, and BCC inputs that suggest addresses from the configured user model while still accepting valid arbitrary email addresses.
 - Persist a package-owned email record before delivery and track the local lifecycle accurately.
 - Treat `sent` as accepted by Laravel's Cloudflare transport. Do not claim provider delivery because Laravel currently discards Cloudflare's successful response payload.
-- Queue sends by default and make the send operation idempotent so retries and double-clicks do not create duplicate messages.
+- Queue sends by default from a single Send action and make the send operation idempotent so retries and double-clicks do not create duplicate messages.
 
 ## Product constraints
 
 - Cloudflare Email Sending is for transactional email. Do not add newsletter, campaign, audience segmentation, or bulk-marketing features.
 - The default From address and name are editable in the UI. A published configuration option may lock them to the package `from.*` values (falling back to Laravel `mail.from`), and every address must remain valid for the application's onboarded Cloudflare sending domain.
-- Preview must show From, Reply-To, To, CC, BCC, subject, rendered HTML, plain text, and attachment metadata before confirmation.
+- Compose submits with a single Send action that validates the form, persists the audit snapshot, and queues delivery. Do not require a separate preview or draft-management ceremony.
 - Logs may contain sensitive content. Access must follow the package authorization callback, secrets must never be stored, and failure details must be sanitized.
 - Do not represent `sent` as `delivered`, and do not invent Cloudflare message IDs or per-recipient delivery states.
 

@@ -21,7 +21,6 @@ use DrAliRagab\FilamentCloudflareMailSender\Support\ConfiguredSender;
 use DrAliRagab\FilamentCloudflareMailSender\Support\MessageDeliveryService;
 use DrAliRagab\FilamentCloudflareMailSender\Support\MessageSnapshotFactory;
 use DrAliRagab\FilamentCloudflareMailSender\Support\OwnedDraftManager;
-use DrAliRagab\FilamentCloudflareMailSender\Support\PreviewProof;
 use DrAliRagab\FilamentCloudflareMailSender\Support\RecipientAddressSet;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\FileUpload;
@@ -46,14 +45,6 @@ final class ComposeEmail extends Page
 
     /** @var array<string, mixed> */
     public array $data = [];
-
-    /** @var array{from: string, reply_to: string|null, to: list<string>, cc: list<string>, bcc: list<string>, subject: string, html: string, text: string, attachments: list<array{name: string, mime_type: string, size: int}>}|null */
-    public ?array $preview = null;
-
-    public ?string $previewProof = null;
-
-    #[Locked]
-    public ?string $currentDraftId = null;
 
     #[Locked]
     public string $uploadScopeProof;
@@ -169,137 +160,44 @@ final class ComposeEmail extends Page
             ]);
     }
 
-    public function saveDraft(): void
+    public function sendEmail(): void
     {
         $this->authorizeCompose();
         $this->resetErrorBag();
-
-        try {
-            $this->persistAuthoritativeDraft();
-            $this->previewProof = null;
-        } catch (InvalidAttachment $exception) {
-            throw ValidationException::withMessages(['data.attachments' => $exception->getMessage()]);
-        } catch (InvalidMessageSnapshot|LogicException $exception) {
-            throw ValidationException::withMessages(['data' => $exception->getMessage()]);
-        }
-
-        Notification::make()
-            ->title(__('filament-cloudflare-mail-sender::messages.notifications.draft_saved'))
-            ->success()
-            ->send();
-    }
-
-    public function previewEmail(): void
-    {
-        $this->authorizeCompose();
-        $this->resetErrorBag();
-
-        try {
-            $draft = $this->persistAuthoritativeDraft();
-        } catch (InvalidAttachment $exception) {
-            throw ValidationException::withMessages(['data.attachments' => $exception->getMessage()]);
-        } catch (InvalidMessageSnapshot|LogicException $exception) {
-            throw ValidationException::withMessages(['data' => $exception->getMessage()]);
-        }
-
-        $replyTo = $draft->reply_to_address === null
-            ? null
-            : $this->formatAddress($draft->reply_to_address, $draft->reply_to_name);
-
-        $this->preview = [
-            'from' => $this->formatAddress($draft->from_address, $draft->from_name),
-            'reply_to' => $replyTo,
-            'to' => array_values($draft->to),
-            'cc' => array_values($draft->cc),
-            'bcc' => array_values($draft->bcc),
-            'subject' => $draft->subject,
-            'html' => $draft->html_body ?? '',
-            'text' => $draft->text_body ?? '',
-            'attachments' => array_map(static fn (array $attachment): array => [
-                'name' => $attachment['name'],
-                'mime_type' => $attachment['mime_type'],
-                'size' => $attachment['size'],
-            ], $draft->attachments),
-        ];
-        $this->previewProof = resolve(PreviewProof::class)->issue($this->requiredActor(), $draft);
-    }
-
-    public function queueEmail(): void
-    {
-        $this->authorizeCompose();
-        $this->resetErrorBag();
-
-        if ($this->previewProof === null) {
-            throw ValidationException::withMessages([
-                'preview' => __('filament-cloudflare-mail-sender::messages.validation.stale_preview'),
-            ]);
-        }
 
         $actor = $this->requiredActor();
-
-        try {
-            $scope = resolve(AttachmentUploadScope::class)->inspect($actor, $this->uploadScopeProof);
-            $proof = resolve(PreviewProof::class)->verify($actor, $this->previewProof);
-
-            if ($proof->draftId !== $scope->draftId || $this->currentDraftId !== $scope->draftId) {
-                throw new InvalidMessageSnapshot('The email preview does not match this compose draft. Preview the email again.');
-            }
-
-            $message = resolve(OwnedDraftManager::class)->find($actor, $scope->draftId);
-
-            if ($message === null) {
-                throw new InvalidMessageSnapshot('The saved draft no longer exists. Preview the email again.');
-            }
-        } catch (InvalidAttachment|InvalidMessageSnapshot $exception) {
-            throw ValidationException::withMessages(['preview' => $exception->getMessage()]);
-        }
-
         $rateKey = 'filament-cloudflare-mail-sender:confirm:'.hash('sha256', $actor::class.':'.$this->actorIdentifier($actor));
 
         if (RateLimiter::tooManyAttempts($rateKey, 5)) {
             throw ValidationException::withMessages([
-                'preview' => __('filament-cloudflare-mail-sender::messages.validation.rate_limited'),
+                'send' => __('filament-cloudflare-mail-sender::messages.validation.rate_limited'),
             ]);
         }
 
         RateLimiter::hit($rateKey, 60);
+
         try {
-            resolve(MessageDeliveryService::class)->queue($message, $proof->fingerprint);
-        } catch (InvalidMessageSnapshot|MessageDispatchFailed|LogicException $exception) {
-            throw ValidationException::withMessages(['preview' => $exception->getMessage()]);
+            $message = $this->persistAuthoritativeDraft();
+            resolve(MessageDeliveryService::class)->queueComposed($message);
+        } catch (InvalidAttachment $exception) {
+            throw ValidationException::withMessages(['data.attachments' => $exception->getMessage()]);
+        } catch (MessageDispatchFailed $exception) {
+            throw ValidationException::withMessages(['send' => $exception->getMessage()]);
+        } catch (InvalidMessageSnapshot|LogicException $exception) {
+            $field = str_contains($exception->getMessage(), 'queue')
+                || str_contains($exception->getMessage(), 'Cloudflare mail transport')
+                ? 'send'
+                : 'data';
+
+            throw ValidationException::withMessages([$field => $exception->getMessage()]);
         }
 
         Notification::make()
             ->title(__('filament-cloudflare-mail-sender::messages.notifications.email_queued'))
             ->success()
             ->send();
-    }
-
-    public function discardDraft(): void
-    {
-        $this->authorizeCompose();
-        $this->resetErrorBag();
-
-        try {
-            $actor = $this->requiredActor();
-            $scope = resolve(AttachmentUploadScope::class)->inspect($actor, $this->uploadScopeProof);
-            resolve(OwnedDraftManager::class)->cancel(
-                actor: $actor,
-                draftId: $scope->draftId,
-                scopeProof: $scope->proof,
-            );
-        } catch (InvalidAttachment $exception) {
-            throw ValidationException::withMessages(['data.attachments' => $exception->getMessage()]);
-        } catch (InvalidMessageSnapshot|LogicException $exception) {
-            throw ValidationException::withMessages(['data' => $exception->getMessage()]);
-        }
 
         $this->resetComposer();
-    }
-
-    public function updatedData(): void
-    {
-        $this->previewProof = null;
     }
 
     public function uniqueRecipientCount(): int
@@ -522,9 +420,6 @@ final class ComposeEmail extends Page
 
     private function resetComposer(): void
     {
-        $this->currentDraftId = null;
-        $this->preview = null;
-        $this->previewProof = null;
         $this->uploadScopeProof = resolve(AttachmentUploadScope::class)->create($this->requiredActor())->proof;
         $this->formSchema()->fill($this->initialState());
     }
@@ -533,16 +428,11 @@ final class ComposeEmail extends Page
     {
         $actor = $this->requiredActor();
         $scope = resolve(AttachmentUploadScope::class)->inspect($actor, $this->uploadScopeProof);
-
-        if ($this->currentDraftId !== null && $this->currentDraftId !== $scope->draftId) {
-            throw new InvalidMessageSnapshot('The current draft does not belong to this compose page.');
-        }
-
         $data = $this->validatedMessageData();
         $manager = resolve(OwnedDraftManager::class);
 
         try {
-            $draft = DB::transaction(function () use ($actor, $scope, $data, $manager): CloudflareMailMessage {
+            return DB::transaction(function () use ($actor, $scope, $data, $manager): CloudflareMailMessage {
                 $draft = resolve(MessageSnapshotFactory::class)->saveOwnedDraft($scope->draftId, $data);
                 $manager->pruneToAuthoritativeLedger($actor, $scope->draftId, $scope->proof);
 
@@ -557,9 +447,6 @@ final class ComposeEmail extends Page
 
             throw $exception;
         }
-        $this->currentDraftId = $draft->id;
-
-        return $draft;
     }
 
     public function ownedUploadDirectory(): string
@@ -635,11 +522,6 @@ final class ComposeEmail extends Page
         }
 
         return $actor;
-    }
-
-    private function formatAddress(string $address, ?string $name): string
-    {
-        return $name === null ? $address : "{$name} <{$address}>";
     }
 
     private function formSchema(): Schema
