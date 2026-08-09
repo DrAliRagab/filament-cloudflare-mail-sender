@@ -1,18 +1,24 @@
 # Filament Cloudflare Mail Sender
 
-A Filament panel package for composing, queueing, and auditing transactional email through Laravel's first-party Cloudflare Email Sending transport.
+Compose, queue, and audit **transactional** email from a Filament panel — using Laravel’s built-in Cloudflare Email Sending mail transport.
 
-The package supports PHP 8.4 within PHP 8.x, Laravel 13.23 or newer within Laravel 13, and Filament 5.1 or newer within Filament 5. It intentionally does not claim compatibility with other major versions.
+No custom SMTP client. No marketing/campaign tools. One **Send email** action that validates, stores an audit record, and queues delivery.
 
-## Installation
+| Requirement | Version |
+| --- | --- |
+| PHP | 8.4+ (8.x) |
+| Laravel | 13.23+ (13.x) |
+| Filament | 5.1+ (5.x) |
 
-Install the package:
+## Quick start
+
+### 1. Install
 
 ```bash
 composer require draliragab/filament-cloudflare-mail-sender
 ```
 
-Publish its configuration and migration, then migrate:
+### 2. Publish config + migration
 
 ```bash
 php artisan vendor:publish --tag=filament-cloudflare-mail-sender-config
@@ -20,15 +26,24 @@ php artisan vendor:publish --tag=filament-cloudflare-mail-sender-migrations
 php artisan migrate
 ```
 
-The migration is publish-only so the host application owns its schema history.
+The migration is publish-only so your app owns the schema history.
 
-## Cloudflare and Laravel configuration
+### 3. Configure Cloudflare in Laravel
 
-First onboard the From address's domain for Email Sending in Cloudflare. Create an API token scoped to the account with the `Email Sending: Edit` permission. Do not place the token in source control.
+1. In Cloudflare, onboard the sending domain for **Email Sending**.
+2. Create an API token with **Email Sending: Edit** for that account.
+3. Put credentials in `.env` (never commit them):
 
-Laravel 13 provides the native `cloudflare` REST API mail transport. This package does not contain a provider client or custom mail transport. Symfony HTTP Client 8, which Laravel uses for the request, is already a package dependency.
+```env
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+CLOUDFLARE_API_TOKEN=your-api-token
 
-Add the mailer to `config/mail.php`:
+MAIL_MAILER=cloudflare
+MAIL_FROM_ADDRESS=noreply@your-onboarded-domain.com
+MAIL_FROM_NAME="${APP_NAME}"
+```
+
+4. Register Laravel’s native Cloudflare mailer in `config/mail.php`:
 
 ```php
 'mailers' => [
@@ -39,7 +54,7 @@ Add the mailer to `config/mail.php`:
 ],
 ```
 
-Add the credentials to `config/services.php`. `token` is the preferred Laravel 13 key:
+5. Wire credentials in `config/services.php` (`token` is preferred in Laravel 13):
 
 ```php
 'cloudflare' => [
@@ -48,15 +63,9 @@ Add the credentials to `config/services.php`. `token` is the preferred Laravel 1
 ],
 ```
 
-Set the package mailer and Laravel's default sender in the published configuration and `config/mail.php`. From address and name are editable by default. Set `from.editable` to `false` to lock them to the package `from.*` values (falling back to Laravel `mail.from`). When editing is enabled, keep `from.allowed_domains` limited to domains onboarded in the same Cloudflare account; an empty list derives the default sender's domain.
+This package does **not** ship its own Cloudflare HTTP client. It uses Laravel’s first-party `cloudflare` transport (Symfony HTTP Client 8).
 
-Attachment uploads are optional. Set `attachments.enabled` to `false` to hide the upload UI and skip attachment disk requirements. When attachments stay enabled, `attachments.disk` falls back to Laravel's default filesystem disk at runtime.
-
-Sending uses a single **Send email** action on the Compose Email page. That validates the form, stores the audit snapshot, and dispatches the package queue job through Laravel's mailer. Run the configured queue worker so messages actually leave via Cloudflare.
-
-## Filament panel registration
-
-Register the plugin explicitly in each panel that should expose it:
+### 4. Register the Filament plugin
 
 ```php
 use DrAliRagab\FilamentCloudflareMailSender\FilamentCloudflareMailSenderPlugin;
@@ -79,11 +88,45 @@ public function panel(Panel $panel): Panel
 }
 ```
 
-Guests are always denied. Authenticated users are allowed by default when a callback is omitted, so applications with privileged panels should configure both callbacks explicitly.
+Guests are always denied. If you omit a callback, any authenticated panel user is allowed — so set both callbacks on privileged panels.
 
-## Recipients and composing
+### 5. Run a queue worker
 
-The `recipients` configuration maps suggestions to a host Eloquent user model:
+Sends are queued by default. Without a worker, messages stay `queued` and never leave for Cloudflare.
+
+```bash
+php artisan queue:work
+```
+
+To use a dedicated queue name, set `queue.name` in the published package config (and pass `--queue=` to the worker). Leave `queue.connection` as `null` so it uses your app’s `QUEUE_CONNECTION` / `queue.default` at runtime.
+
+### 6. Send from the panel
+
+Open **Email → Compose Email**, fill recipients and Markdown body, then confirm **Send email**.
+
+- The form validates and queues the message.
+- **Sent Emails** is the audit log (status, envelope, bodies, failures).
+- Status **Accepted by Cloudflare** means Laravel got a successful provider response — **not** inbox delivery.
+
+---
+
+## Package configuration (common knobs)
+
+Published file: `config/filament-cloudflare-mail-sender.php`.
+
+### Sender (From)
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `from.address` / `from.name` | `null` | Fall back to `mail.from` at runtime |
+| `from.editable` | `true` | Allow editing From in the compose UI |
+| `from.allowed_domains` | `[]` | When editable, limit domains (empty = default sender’s domain) |
+
+Keep published `from.address` / `from.name` as `null` unless you intentionally override Laravel’s mail defaults. Calling `config('mail.*')` inside the published package config file is unsafe (load order).
+
+### Recipients
+
+Suggestions come from your user model — they are **not** an allowlist. Any valid address can be entered.
 
 ```php
 'recipients' => [
@@ -94,35 +137,24 @@ The `recipients` configuration maps suggestions to a host Eloquent user model:
 ],
 ```
 
-Suggestions are conveniences, not an allowlist: authorized users may enter any valid email address. To, CC, and BCC are canonicalized and deduplicated across fields. Cloudflare currently permits at most 50 combined unique recipients, which the package validates before queueing.
+To / CC / BCC are normalized and deduplicated. Cloudflare allows at most **50** unique recipients per message; the package checks that before queueing.
 
-Filament's `MarkdownEditor` is the only message-body format. **Send email** (confirmed action below the form) validates the form, renders HTML and plain text through the same Markdown service used for delivery, persists the audit snapshot, and queues the job. There is no separate save-draft or preview step.
+### Attachments
 
-## Queues and delivery semantics
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `attachments.enabled` | `true` | Set `false` to hide uploads and skip disk checks |
+| `attachments.disk` | `null` | Falls back to `filesystems.default` at runtime |
+| `attachments.max_file_kib` | `4096` | Per-file limit |
+| `message.max_total_kib` | `5120` | Whole-message budget (Cloudflare-oriented) |
 
-Configure `queue.connection` and `queue.name`, then run a worker for that connection and queue. Leave `queue.connection` null to use the application's `queue.default` at runtime (recommended in published config so load order cannot null out the connection). For example, when both are `database` and `mail`:
+### Navigation
 
-```bash
-php artisan queue:work database --queue=mail
-```
+Defaults to an **Email** nav group with Compose Email and Sent Emails. Override labels/group/icon/sort under `navigation`.
 
-The job defaults to three attempts with backoff intervals of 60, 300, and 900 seconds. Send assigns one immutable send token under a database row lock. Duplicate sends against the same upload scope and ordinary same-token retries cannot send concurrently, and queue dispatch occurs only after the package transaction commits.
+### Audit retention
 
-A local `sent` status means **Accepted by Cloudflare**, not delivered. The native Laravel transport does not expose provider delivery state or a durable provider message ID to this package. There is also an unavoidable duplicate window if Cloudflare accepts a request but the worker crashes before the local transaction records success. Design downstream messages to tolerate that rare failure mode.
-
-This package is only for transactional email. It does not provide newsletters, campaigns, audience segmentation, or bulk marketing.
-
-## Attachments, limits, and privacy
-
-Attachments are stored on the configured Laravel disk below `attachments.directory`. Upload paths are scoped to the authenticated actor and a server-issued draft identifier. Before delivery the package revalidates MIME type, size, path ownership, and SHA-256 content digest. Temporary objects are removed after terminal processing.
-
-The defaults allow files up to 4 MiB each and enforce Cloudflare's 5 MiB total message budget across rendered content and base64-expanded attachments. Cloudflare remains the final authority for its service limits.
-
-Audit records include recipients, headers, attachment names and metadata, lifecycle timestamps, and sanitized failure details. They can contain personal or confidential information. Restrict audit authorization and filesystem access accordingly; package records never store Cloudflare credentials. With `audit.store_body=false`, Markdown, HTML, and plain text are scrubbed after a terminal state.
-
-## Retention
-
-Audit retention is opt-in. The default `audit.retention_days=null` makes pruning a no-op. Set a positive integer to remove only Sent, Failed, and Cancelled records strictly older than their matching terminal timestamp:
+Retention is opt-in (`audit.retention_days = null` means never prune). Example for 90 days:
 
 ```php
 'audit' => [
@@ -131,13 +163,11 @@ Audit retention is opt-in. The default `audit.retention_days=null` makes pruning
 ],
 ```
 
-The command cleans any remaining package-owned attachment objects before deleting each record. Unsafe paths and filesystem failures retain that record so a later run can retry:
-
 ```bash
 php artisan cloudflare-mail:prune
 ```
 
-Schedule it with Laravel 13 in `routes/console.php`:
+Schedule in `routes/console.php`:
 
 ```php
 use Illuminate\Support\Facades\Schedule;
@@ -145,23 +175,51 @@ use Illuminate\Support\Facades\Schedule;
 Schedule::command('cloudflare-mail:prune')->daily();
 ```
 
-## Testing and verification
+With `audit.store_body = false`, Markdown/HTML/plain text are scrubbed after a terminal status.
 
-Automated tests use fake and non-network mail transports and never contact Cloudflare.
+---
+
+## How sending works
+
+1. User confirms **Send email**.
+2. Package validates the form, renders Markdown → HTML + plain text (same renderer used for delivery).
+3. An audit row is stored, a send token is assigned, status becomes `queued`, and `SendComposedEmail` is dispatched.
+4. The worker sends via `Mail::mailer(...)` and Laravel’s Cloudflare transport.
+5. On success, status becomes **Accepted by Cloudflare** (`sent`).
+
+There is no separate save-draft / preview step in the UI. Double-clicks against the same compose scope are designed not to create duplicate provider sends.
+
+**Important limits of the Laravel transport**
+
+- `sent` ≠ delivered to the inbox.
+- No durable Cloudflare message ID is exposed to this package today.
+- If Cloudflare accepts a message and the worker dies before local success is recorded, a rare duplicate send is possible — design content to tolerate that.
+
+Transactional use only: no newsletters, campaigns, audience tools, or bulk marketing features.
+
+---
+
+## Privacy
+
+Audit logs can hold recipient addresses, subjects, bodies, and attachment metadata. Restrict who can compose and who can view Sent Emails. Credentials are never stored in package tables. Failure details are sanitized before persistence.
+
+---
+
+## Development (package contributors)
+
+Tests use fake / non-network mailers and never call Cloudflare.
 
 ```bash
 composer format
 composer refactor
 composer analyse
 composer test
-composer verify
+composer verify   # authoritative gate
 ```
 
-`composer verify` is the authoritative non-mutating gate: strict Composer validation, optimized strict-PSR autoloading, dependency audit, Pint check, Rector dry-run, PHPStan/Larastan at max level, and Pest with at least 95% line coverage.
+### Optional real-provider smoke test
 
-## Manual real-provider smoke test
-
-This is deliberately opt-in and must never run in automated tests or CI. After configuring a non-production Cloudflare account and an onboarded sender domain, replace the recipient below with an address you control, explicitly set the shell guard, and run these lines in `php artisan tinker`:
+Opt-in only — never in CI. After configuring a non-production Cloudflare account:
 
 ```bash
 RUN_CLOUDFLARE_MAIL_SMOKE=1 php artisan tinker
@@ -176,13 +234,15 @@ throw_unless(($_SERVER['RUN_CLOUDFLARE_MAIL_SMOKE'] ?? null) === '1');
 Mail::mailer('cloudflare')->raw(
     'Manual Cloudflare transport smoke test.',
     static fn (Message $message) => $message
-        ->to('controlled-recipient@example.com')
+        ->to('you@example.com')
         ->subject('Manual Cloudflare mail smoke test'),
 );
 ```
 
-That call sends real provider mail. Success proves only that Cloudflare accepted the request; it does not prove inbox delivery. For an end-to-end package smoke test, compose and queue a controlled transactional message in the registered panel and run its configured worker.
+Success means Cloudflare accepted the request, not that mail landed in an inbox.
+
+---
 
 ## License
 
-Filament Cloudflare Mail Sender is open-source software licensed under the [MIT license](LICENSE.md).
+MIT — see [LICENSE.md](LICENSE.md).
