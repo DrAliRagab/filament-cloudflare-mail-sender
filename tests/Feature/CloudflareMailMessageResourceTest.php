@@ -101,8 +101,10 @@ test('audit view safely represents scrubbed bodies and malformed legacy attachme
 
     Livewire::test(ViewCloudflareMailMessage::class, ['record' => $message->id])
         ->assertOk()
-        ->assertSee('Body storage is disabled or this terminal record has been scrubbed.')
-        ->assertSee('—');
+        ->assertSee(__('filament-cloudflare-mail-sender::messages.audit.html'))
+        ->assertSee(__('filament-cloudflare-mail-sender::messages.audit.text'))
+        ->assertSee(__('filament-cloudflare-mail-sender::messages.audit.body_unavailable'))
+        ->assertSee(__('filament-cloudflare-mail-sender::messages.audit.empty_value'));
 });
 
 test('audit resource falls back safely for invalid navigation configuration', function (): void {
@@ -167,7 +169,7 @@ test('audit view shows safe delivery evidence and accepted not delivered help', 
     $view->assertActionExists('duplicate');
     $view
         ->assertSee('Accepted by Cloudflare')
-        ->assertSee('It does not mean delivered.')
+        ->assertSee('It does not mean the email was delivered to the inbox.')
         ->assertSee('reader@example.test')
         ->assertSee('copy@example.test')
         ->assertSee('hidden@example.test')

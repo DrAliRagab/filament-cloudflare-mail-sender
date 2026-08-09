@@ -13,13 +13,13 @@ use DrAliRagab\FilamentCloudflareMailSender\Jobs\SendComposedEmail;
 use DrAliRagab\FilamentCloudflareMailSender\Models\CloudflareMailMessage;
 use DrAliRagab\FilamentCloudflareMailSender\Support\MessageSnapshotFactory;
 use DrAliRagab\FilamentCloudflareMailSender\Tests\Fixtures\TestActor;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\TextInput;
 use Filament\Panel;
-use Filament\Actions\Testing\TestAction;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
@@ -77,6 +77,7 @@ test('compose exposes native fields and a single send action without draft or pr
     $component->assertDontSee('Preview email');
     $component->assertDontSee('Discard draft');
     $component->assertDontSee('Queue email');
+    $component->assertDontSee('New tag');
     $component
         ->assertSchemaStateSet([
             'from_address' => 'sender@example.test',
@@ -87,8 +88,24 @@ test('compose exposes native fields and a single send action without draft or pr
             'cc' => [],
             'bcc' => [],
         ])
-        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && ! $component->isDisabled())
-        ->assertSchemaComponentExists('to', 'form', static fn (mixed $component): bool => $component instanceof TagsInput && $component->getSuggestions() === ['Known User <known@example.test>'])
+        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput
+            && ! $component->isDisabled()
+            && $component->getPlaceholder() === __('filament-cloudflare-mail-sender::messages.placeholders.from_address'))
+        ->assertSchemaComponentExists('from_name', 'form', static fn (mixed $component): bool => $component instanceof TextInput
+            && $component->getPlaceholder() === __('filament-cloudflare-mail-sender::messages.placeholders.from_name'))
+        ->assertSchemaComponentExists('reply_to_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput
+            && $component->getPlaceholder() === __('filament-cloudflare-mail-sender::messages.placeholders.reply_to_address'))
+        ->assertSchemaComponentExists('reply_to_name', 'form', static fn (mixed $component): bool => $component instanceof TextInput
+            && $component->getPlaceholder() === __('filament-cloudflare-mail-sender::messages.placeholders.reply_to_name'))
+        ->assertSchemaComponentExists('subject', 'form', static fn (mixed $component): bool => $component instanceof TextInput
+            && $component->getPlaceholder() === __('filament-cloudflare-mail-sender::messages.placeholders.subject'))
+        ->assertSchemaComponentExists('to', 'form', static fn (mixed $component): bool => $component instanceof TagsInput
+            && $component->getSuggestions() === ['Known User <known@example.test>']
+            && $component->getPlaceholder() === __('filament-cloudflare-mail-sender::messages.placeholders.recipient'))
+        ->assertSchemaComponentExists('cc', 'form', static fn (mixed $component): bool => $component instanceof TagsInput
+            && $component->getPlaceholder() === __('filament-cloudflare-mail-sender::messages.placeholders.recipient'))
+        ->assertSchemaComponentExists('bcc', 'form', static fn (mixed $component): bool => $component instanceof TagsInput
+            && $component->getPlaceholder() === __('filament-cloudflare-mail-sender::messages.placeholders.recipient'))
         ->assertSchemaComponentExists('body', 'form', static fn (mixed $component): bool => $component instanceof MarkdownEditor)
         ->assertSchemaComponentExists('attachments', 'form', static function (mixed $component): bool {
             return $component instanceof FileUpload

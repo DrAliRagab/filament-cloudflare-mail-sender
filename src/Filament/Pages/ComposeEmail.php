@@ -95,20 +95,24 @@ final class ComposeEmail extends Page
                     ->schema([
                         TextInput::make('from_address')
                             ->label(__('filament-cloudflare-mail-sender::messages.fields.from_address'))
+                            ->placeholder(__('filament-cloudflare-mail-sender::messages.placeholders.from_address'))
                             ->email()
                             ->required()
                             ->disabled(! $fromEditable)
                             ->dehydrated(),
                         TextInput::make('from_name')
                             ->label(__('filament-cloudflare-mail-sender::messages.fields.from_name'))
+                            ->placeholder(__('filament-cloudflare-mail-sender::messages.placeholders.from_name'))
                             ->disabled(! $fromEditable)
                             ->dehydrated(),
                         TextInput::make('reply_to_address')
                             ->label(__('filament-cloudflare-mail-sender::messages.fields.reply_to_address'))
+                            ->placeholder(__('filament-cloudflare-mail-sender::messages.placeholders.reply_to_address'))
                             ->email()
                             ->nullable(),
                         TextInput::make('reply_to_name')
                             ->label(__('filament-cloudflare-mail-sender::messages.fields.reply_to_name'))
+                            ->placeholder(__('filament-cloudflare-mail-sender::messages.placeholders.reply_to_name'))
                             ->nullable(),
                     ]),
                 Section::make(__('filament-cloudflare-mail-sender::messages.compose.sections.recipients'))
@@ -132,6 +136,7 @@ final class ComposeEmail extends Page
                     ->schema([
                         TextInput::make('subject')
                             ->label(__('filament-cloudflare-mail-sender::messages.fields.subject'))
+                            ->placeholder(__('filament-cloudflare-mail-sender::messages.placeholders.subject'))
                             ->required()
                             ->maxLength(255),
                         MarkdownEditor::make('body')
@@ -283,6 +288,7 @@ final class ComposeEmail extends Page
     {
         return TagsInput::make($field)
             ->label(__('filament-cloudflare-mail-sender::messages.fields.'.$field))
+            ->placeholder(__('filament-cloudflare-mail-sender::messages.placeholders.recipient'))
             ->suggestions($this->recipientSuggestionLabels())
             ->live();
     }

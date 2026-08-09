@@ -175,34 +175,61 @@ final class CloudflareMailMessageResource extends Resource
                             : null),
                     TextEntry::make('actor_id')
                         ->label(__('filament-cloudflare-mail-sender::messages.fields.actor')),
-                    TextEntry::make('created_at')->dateTime(),
-                    TextEntry::make('queued_at')->dateTime()->placeholder('—'),
-                    TextEntry::make('sent_at')->dateTime()->placeholder('—'),
-                    TextEntry::make('failed_at')->dateTime()->placeholder('—'),
-                    TextEntry::make('cancelled_at')->dateTime()->placeholder('—'),
-                    TextEntry::make('attempt_count'),
+                    TextEntry::make('created_at')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.created_at'))
+                        ->dateTime(),
+                    TextEntry::make('queued_at')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.queued_at'))
+                        ->dateTime()
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
+                    TextEntry::make('sent_at')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.sent_at'))
+                        ->dateTime()
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
+                    TextEntry::make('failed_at')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.failed_at'))
+                        ->dateTime()
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
+                    TextEntry::make('cancelled_at')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.cancelled_at'))
+                        ->dateTime()
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
+                    TextEntry::make('attempt_count')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.attempt_count')),
                 ]),
             Section::make(__('filament-cloudflare-mail-sender::messages.audit.sections.envelope'))
                 ->columns(2)
                 ->schema([
                     TextEntry::make('from_address')->label(__('filament-cloudflare-mail-sender::messages.fields.from_address')),
-                    TextEntry::make('from_name')->label(__('filament-cloudflare-mail-sender::messages.fields.from_name'))->placeholder('—'),
-                    TextEntry::make('reply_to_address')->label(__('filament-cloudflare-mail-sender::messages.fields.reply_to_address'))->placeholder('—'),
-                    TextEntry::make('reply_to_name')->label(__('filament-cloudflare-mail-sender::messages.fields.reply_to_name'))->placeholder('—'),
+                    TextEntry::make('from_name')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.from_name'))
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
+                    TextEntry::make('reply_to_address')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.reply_to_address'))
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
+                    TextEntry::make('reply_to_name')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.reply_to_name'))
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
                     TextEntry::make('to')->label(__('filament-cloudflare-mail-sender::messages.fields.to'))->listWithLineBreaks(),
-                    TextEntry::make('cc')->label(__('filament-cloudflare-mail-sender::messages.fields.cc'))->listWithLineBreaks()->placeholder('—'),
-                    TextEntry::make('bcc')->label(__('filament-cloudflare-mail-sender::messages.fields.bcc'))->listWithLineBreaks()->placeholder('—'),
+                    TextEntry::make('cc')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.cc'))
+                        ->listWithLineBreaks()
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
+                    TextEntry::make('bcc')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.bcc'))
+                        ->listWithLineBreaks()
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
                     TextEntry::make('subject')->label(__('filament-cloudflare-mail-sender::messages.fields.subject'))->columnSpanFull(),
                 ]),
             Section::make(__('filament-cloudflare-mail-sender::messages.audit.sections.body'))
                 ->schema([
                     TextEntry::make('html_body')
-                        ->label(__('filament-cloudflare-mail-sender::messages.preview.html'))
+                        ->label(__('filament-cloudflare-mail-sender::messages.audit.html'))
                         ->formatStateUsing(static fn (?string $state): string|HtmlString => $state === null || $state === ''
                             ? self::translation('filament-cloudflare-mail-sender::messages.audit.body_unavailable')
                             : new HtmlString($state)),
                     TextEntry::make('text_body')
-                        ->label(__('filament-cloudflare-mail-sender::messages.preview.text'))
+                        ->label(__('filament-cloudflare-mail-sender::messages.audit.text'))
                         ->placeholder(__('filament-cloudflare-mail-sender::messages.audit.body_unavailable')),
                     TextEntry::make('markdown_body')
                         ->label(__('filament-cloudflare-mail-sender::messages.audit.markdown_source'))
@@ -215,21 +242,25 @@ final class CloudflareMailMessageResource extends Resource
                         ->listWithLineBreaks()
                         ->formatStateUsing(static function (mixed $state): string {
                             if (! is_array($state)) {
-                                return '—';
+                                return self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value');
                             }
 
-                            $name = is_string($state['name'] ?? null) ? $state['name'] : '—';
-                            $mimeType = is_string($state['mime_type'] ?? null) ? $state['mime_type'] : '—';
+                            $name = is_string($state['name'] ?? null) ? $state['name'] : self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value');
+                            $mimeType = is_string($state['mime_type'] ?? null) ? $state['mime_type'] : self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value');
                             $size = is_int($state['size'] ?? null) ? ' · '.Number::fileSize($state['size']) : '';
 
                             return "{$name} · {$mimeType}{$size}";
                         })
-                        ->placeholder(__('filament-cloudflare-mail-sender::messages.preview.no_attachments')),
+                        ->placeholder(__('filament-cloudflare-mail-sender::messages.audit.no_attachments')),
                 ]),
             Section::make(__('filament-cloudflare-mail-sender::messages.audit.sections.failure'))
                 ->schema([
-                    TextEntry::make('failure_class')->placeholder('—'),
-                    TextEntry::make('failure_message')->placeholder('—'),
+                    TextEntry::make('failure_class')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.failure_class'))
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
+                    TextEntry::make('failure_message')
+                        ->label(__('filament-cloudflare-mail-sender::messages.fields.failure_message'))
+                        ->placeholder(self::translation('filament-cloudflare-mail-sender::messages.audit.empty_value')),
                 ])
                 ->visible(static fn (CloudflareMailMessage $record): bool => $record->failure_class !== null || $record->failure_message !== null),
         ]);
