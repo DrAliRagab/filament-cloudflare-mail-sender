@@ -17,7 +17,7 @@
     "require-dev": {
         "driftingly/rector-laravel": "^2.5",
         "larastan/larastan": "^3.0",
-        "laravel/pint": "^1.0",
+        "laravel/pint": "^1.24",
         "orchestra/testbench": "^11.1",
         "pestphp/pest": "^5.0.1",
         "pestphp/pest-plugin-laravel": "^5.0.1",
