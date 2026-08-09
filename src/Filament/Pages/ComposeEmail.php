@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DrAliRagab\FilamentCloudflareMailSender\Filament\Pages;
 
+use DrAliRagab\FilamentCloudflareMailSender\Attachments\AttachmentPolicy;
 use DrAliRagab\FilamentCloudflareMailSender\Attachments\AttachmentUploadScope;
 use DrAliRagab\FilamentCloudflareMailSender\Contracts\RecipientSuggestionProvider;
 use DrAliRagab\FilamentCloudflareMailSender\Data\ComposedMessageData;
@@ -91,6 +92,7 @@ final class ComposeEmail extends Page
         $attachmentConfig = config('filament-cloudflare-mail-sender.attachments', []);
         $attachmentConfig = is_array($attachmentConfig) ? $attachmentConfig : [];
         $fromEditable = ConfiguredSender::editable();
+        $attachmentsEnabled = AttachmentPolicy::enabled();
 
         return $schema
             ->statePath('data')
@@ -144,10 +146,11 @@ final class ComposeEmail extends Page
                             ->required(),
                     ]),
                 Section::make(__('filament-cloudflare-mail-sender::messages.compose.sections.attachments'))
+                    ->visible($attachmentsEnabled)
                     ->schema([
                         FileUpload::make('attachments')
                             ->label(__('filament-cloudflare-mail-sender::messages.fields.attachments'))
-                            ->disk($this->stringConfig($attachmentConfig, 'disk'))
+                            ->disk(AttachmentPolicy::configuredDisk() ?? 'local')
                             ->directory(fn (): string => $this->ownedUploadDirectory())
                             ->preventFilePathTampering(
                                 allowFilePathUsing: fn (string $file): bool => $this->isOwnedUploadPath($file),
@@ -161,8 +164,7 @@ final class ComposeEmail extends Page
                             ->maxSize($this->integerConfig($attachmentConfig, 'max_file_kib'))
                             ->multiple()
                             ->preserveFilenames()
-                            ->storeFileNamesIn('attachment_names')
-                            ->disabled(($attachmentConfig['enabled'] ?? true) !== true),
+                            ->storeFileNamesIn('attachment_names'),
                     ]),
             ]);
     }
@@ -425,16 +427,26 @@ final class ComposeEmail extends Page
         $actor = $this->requiredActor();
         $attachments = $this->attachmentState($state);
 
-        try {
-            foreach ($attachments as $attachment) {
-                resolve(AttachmentUploadScope::class)->assertOwnsPath(
-                    $actor,
-                    $this->uploadScopeProof,
-                    $attachment['path'],
-                );
+        if (! AttachmentPolicy::enabled()) {
+            $forgedAttachments = $this->data['attachments'] ?? null;
+
+            if ($attachments !== [] || (is_array($forgedAttachments) && $forgedAttachments !== [])) {
+                throw ValidationException::withMessages([
+                    'data.attachments' => 'Attachments are disabled.',
+                ]);
             }
-        } catch (InvalidAttachment $exception) {
-            throw ValidationException::withMessages(['data.attachments' => $exception->getMessage()]);
+        } else {
+            try {
+                foreach ($attachments as $attachment) {
+                    resolve(AttachmentUploadScope::class)->assertOwnsPath(
+                        $actor,
+                        $this->uploadScopeProof,
+                        $attachment['path'],
+                    );
+                }
+            } catch (InvalidAttachment $exception) {
+                throw ValidationException::withMessages(['data.attachments' => $exception->getMessage()]);
+            }
         }
 
         return new ComposedMessageData(
@@ -667,14 +679,6 @@ final class ComposeEmail extends Page
     private function nullableStateString(mixed $value): ?string
     {
         return is_string($value) && trim($value) !== '' ? trim($value) : null;
-    }
-
-    /** @param array<mixed> $config */
-    private function stringConfig(array $config, string $key): string
-    {
-        $value = $config[$key] ?? '';
-
-        return is_string($value) ? $value : '';
     }
 
     /** @param array<mixed> $config */

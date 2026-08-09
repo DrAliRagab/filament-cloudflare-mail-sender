@@ -51,13 +51,36 @@ final readonly class AttachmentPolicy
      * @param  list<string>  $allowedMimeTypes
      */
     public function __construct(
+        private bool $enabled,
         private string $disk,
         private string $directory,
         private int $maxFileBytes,
         private int $maxTotalBytes,
         private array $allowedMimeTypes,
-        private FilesystemAdapter $storage,
+        private ?FilesystemAdapter $storage,
     ) {}
+
+    public static function enabled(): bool
+    {
+        return config('filament-cloudflare-mail-sender.attachments.enabled', true) === true;
+    }
+
+    public static function configuredDisk(): ?string
+    {
+        $disk = config('filament-cloudflare-mail-sender.attachments.disk');
+
+        if (is_string($disk) && $disk !== '') {
+            return $disk;
+        }
+
+        if ($disk !== null && $disk !== '') {
+            return null;
+        }
+
+        $fallback = config('filesystems.default');
+
+        return is_string($fallback) && $fallback !== '' ? $fallback : null;
+    }
 
     public static function fromConfiguration(): self
     {
@@ -66,28 +89,45 @@ final readonly class AttachmentPolicy
         $attachments = is_array($attachments) ? $attachments : [];
         $message = is_array($message) ? $message : [];
 
-        $disk = $attachments['disk'] ?? config('filesystems.default');
         $maxFileKib = $attachments['max_file_kib'] ?? 4096;
         $maxTotalKib = $message['max_total_kib'] ?? 5120;
         $allowedMimeTypes = $attachments['allowed_mime_types'] ?? [];
         $directory = $attachments['directory'] ?? null;
+        $enabled = self::enabled();
 
-        if (! is_string($disk) || $disk === '' || ! is_string($directory) || ! self::isSafeDirectory($directory)
-            || ! is_int($maxFileKib) || ! is_int($maxTotalKib) || ! is_array($allowedMimeTypes)) {
+        if (! is_int($maxFileKib) || ! is_int($maxTotalKib) || ! is_array($allowedMimeTypes)) {
             throw new InvalidAttachment('The attachment policy configuration is invalid.');
         }
 
         /** @var list<string> $allowedMimeTypes */
         $allowedMimeTypes = array_values(array_filter($allowedMimeTypes, is_string(...)));
-        $storage = Storage::disk($disk);
+
+        if (! $enabled) {
+            return new self(
+                enabled: false,
+                disk: '',
+                directory: '',
+                maxFileBytes: $maxFileKib * 1024,
+                maxTotalBytes: $maxTotalKib * 1024,
+                allowedMimeTypes: $allowedMimeTypes,
+                storage: null,
+            );
+        }
+
+        $disk = self::configuredDisk();
+
+        if ($disk === null || ! is_string($directory) || ! self::isSafeDirectory($directory)) {
+            throw new InvalidAttachment('The attachment policy configuration is invalid.');
+        }
 
         return new self(
+            enabled: true,
             disk: $disk,
             directory: trim($directory, '/'),
             maxFileBytes: $maxFileKib * 1024,
             maxTotalBytes: $maxTotalKib * 1024,
             allowedMimeTypes: $allowedMimeTypes,
-            storage: $storage,
+            storage: Storage::disk($disk),
         );
     }
 
@@ -97,6 +137,16 @@ final readonly class AttachmentPolicy
      */
     public function validate(array $attachments, RenderedMessageBody $renderedBody): array
     {
+        if (! $this->enabled) {
+            if ($attachments !== []) {
+                throw new InvalidAttachment('Attachments are disabled.');
+            }
+
+            $this->assertMessageFitsBudget([], $renderedBody);
+
+            return [];
+        }
+
         $validated = [];
 
         foreach ($attachments as $attachment) {
@@ -113,6 +163,16 @@ final readonly class AttachmentPolicy
      */
     public function revalidate(array $attachments, RenderedMessageBody $renderedBody): void
     {
+        if (! $this->enabled) {
+            if ($attachments !== []) {
+                throw new InvalidAttachment('Attachments are disabled.');
+            }
+
+            $this->assertMessageFitsBudget([], $renderedBody);
+
+            return;
+        }
+
         foreach ($attachments as $attachment) {
             if ($attachment->disk !== $this->disk) {
                 throw new InvalidAttachment('The attachment storage disk changed.');
@@ -138,6 +198,12 @@ final readonly class AttachmentPolicy
      */
     private function readAttachment(array $attachment): MessageAttachment
     {
+        $storage = $this->storage;
+
+        if ($storage === null) {
+            throw new InvalidAttachment('The attachment policy configuration is invalid.');
+        }
+
         $path = $attachment['path'];
         $name = $attachment['name'] ?? $path;
 
@@ -153,12 +219,12 @@ final readonly class AttachmentPolicy
             throw new InvalidAttachment('The attachment extension does not match its display name.');
         }
 
-        if (! $this->storage->exists($path)) {
+        if (! $storage->exists($path)) {
             throw new InvalidAttachment('The attachment no longer exists.');
         }
 
-        $byteSize = $this->storage->size($path);
-        $mimeType = $this->storage->mimeType($path);
+        $byteSize = $storage->size($path);
+        $mimeType = $storage->mimeType($path);
 
         if ($byteSize < 0 || ! is_string($mimeType) || $mimeType === '') {
             throw new InvalidAttachment('The attachment metadata is unavailable.');
@@ -186,7 +252,13 @@ final readonly class AttachmentPolicy
 
     private function contentDigest(string $path): string
     {
-        $stream = $this->storage->readStream($path);
+        $storage = $this->storage;
+
+        if ($storage === null) {
+            throw new InvalidAttachment('The attachment policy configuration is invalid.');
+        }
+
+        $stream = $storage->readStream($path);
 
         if (! is_resource($stream)) {
             throw new InvalidAttachment('The attachment content is unavailable for verification.');

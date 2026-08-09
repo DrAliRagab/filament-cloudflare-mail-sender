@@ -146,6 +146,40 @@ test('it rejects a rendered message exceeding the 5120 KiB budget after base64 a
     ))->toThrow(InvalidAttachment::class, '5120 KiB');
 });
 
+test('disabled attachments accept an empty list without requiring a configured disk', function (): void {
+    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
+    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+
+    expect(AttachmentPolicy::fromConfiguration()->validate(
+        attachments: [],
+        renderedBody: new RenderedMessageBody(html: '<p>Hello</p>', text: 'Hello'),
+    ))->toBe([]);
+});
+
+test('disabled attachments reject any submitted attachment paths', function (): void {
+    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
+    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+
+    expect(fn (): array => AttachmentPolicy::fromConfiguration()->validate(
+        attachments: [['path' => attachmentPath('invoice.pdf'), 'name' => 'invoice.pdf']],
+        renderedBody: new RenderedMessageBody(html: '', text: ''),
+    ))->toThrow(InvalidAttachment::class, 'Attachments are disabled');
+});
+
+test('attachment policy falls back to the default filesystem disk when package disk is empty', function (): void {
+    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+    config()->set('filesystems.default', 'message-attachments');
+    storeAttachmentFile(attachmentPath('invoice.pdf'), "%PDF-1.4\nInvoice");
+
+    $attachments = AttachmentPolicy::fromConfiguration()->validate(
+        attachments: [['path' => attachmentPath('invoice.pdf'), 'name' => 'invoice.pdf']],
+        renderedBody: new RenderedMessageBody(html: '', text: ''),
+    );
+
+    expect($attachments)->toHaveCount(1)
+        ->and($attachments[0]->disk)->toBe('message-attachments');
+});
+
 test('it revalidates persisted attachment metadata against the configured disk before delivery', function (): void {
     storeAttachmentFile(attachmentPath('invoice.pdf'), "%PDF-1.4\nInvoice");
 

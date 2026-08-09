@@ -330,6 +330,49 @@ test('save and preview expose invalid attachment policy configuration on the att
     'preview' => 'previewEmail',
 ]);
 
+test('preview succeeds when attachments are disabled even if the attachment disk is unset', function (): void {
+    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
+    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+    app()->forgetInstance(AttachmentPolicy::class);
+    app()->forgetInstance(MessageSnapshotFactory::class);
+
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState())
+        ->call('previewEmail')
+        ->assertHasNoErrors()
+        ->assertSet('preview.subject', 'Transactional update')
+        ->assertSet('preview.attachments', [])
+        ->assertSet('previewProof', fn (?string $proof): bool => is_string($proof) && $proof !== '');
+});
+
+test('preview rejects forged attachment paths when attachments are disabled', function (): void {
+    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
+    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+    app()->forgetInstance(AttachmentPolicy::class);
+    app()->forgetInstance(MessageSnapshotFactory::class);
+
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState())
+        ->set('data.attachments', ['mail-attachments/forged.pdf'])
+        ->set('data.attachment_names', ['mail-attachments/forged.pdf' => 'forged.pdf'])
+        ->call('previewEmail')
+        ->assertHasErrors(['data.attachments']);
+
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+});
+
+test('queue email action is available only after a successful preview', function (): void {
+    $component = Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState())
+        ->assertDontSee(__('filament-cloudflare-mail-sender::messages.actions.queue'))
+        ->call('previewEmail')
+        ->assertSee(__('filament-cloudflare-mail-sender::messages.actions.queue'));
+
+    $component->call('queueEmail')->assertHasNoErrors();
+
+    expect(CloudflareMailMessage::query()->sole()->status)->toBe(MessageStatus::Queued);
+});
+
 test('save and preview expose invalid delivery configuration without losing form state', function (string $action): void {
     $component = Livewire::test(ComposeEmail::class)->fillForm(composeValidState());
     config()->set('filament-cloudflare-mail-sender.mailer', null);

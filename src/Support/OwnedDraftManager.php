@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DrAliRagab\FilamentCloudflareMailSender\Support;
 
+use DrAliRagab\FilamentCloudflareMailSender\Attachments\AttachmentPolicy;
 use DrAliRagab\FilamentCloudflareMailSender\Attachments\AttachmentUploadScope;
 use DrAliRagab\FilamentCloudflareMailSender\Enums\MessageStatus;
 use DrAliRagab\FilamentCloudflareMailSender\Exceptions\InvalidAttachment;
@@ -65,6 +66,10 @@ final readonly class OwnedDraftManager
         string $draftId,
         string $scopeProof,
     ): void {
+        if (! AttachmentPolicy::enabled()) {
+            return;
+        }
+
         $this->database->transaction(function () use ($actor, $draftId, $scopeProof): void {
             $scope = $this->uploadScopes->inspect($actor, $scopeProof);
 
@@ -92,6 +97,10 @@ final readonly class OwnedDraftManager
 
     public function deleteUpload(Authenticatable $actor, string $scopeProof, string $path): void
     {
+        if (! AttachmentPolicy::enabled()) {
+            throw new InvalidAttachment('Attachments are disabled.');
+        }
+
         $this->uploadScopes->assertOwnsPath($actor, $scopeProof, $path);
         $this->deleteOwnedPaths($actor, $scopeProof, [$path]);
     }
@@ -101,6 +110,10 @@ final readonly class OwnedDraftManager
      */
     private function deleteOwnedPaths(Authenticatable $actor, string $scopeProof, array $paths): void
     {
+        if (! AttachmentPolicy::enabled() || $paths === []) {
+            return;
+        }
+
         $storage = $this->storage();
 
         foreach ($paths as $path) {
@@ -119,14 +132,18 @@ final readonly class OwnedDraftManager
     /** @return list<string> */
     private function scopeFiles(string $directory): array
     {
+        if (! AttachmentPolicy::enabled()) {
+            return [];
+        }
+
         return array_values($this->storage()->allFiles($directory));
     }
 
     private function storage(): FilesystemAdapter
     {
-        $disk = config('filament-cloudflare-mail-sender.attachments.disk');
+        $disk = AttachmentPolicy::configuredDisk();
 
-        if (! is_string($disk) || $disk === '') {
+        if ($disk === null) {
             throw new InvalidAttachment('The attachment disk configuration is invalid.');
         }
 

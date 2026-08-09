@@ -40,7 +40,9 @@ return [
 
     'attachments' => [
         'enabled' => true,
-        'disk' => config('filesystems.default'),
+        // Null falls back to config('filesystems.default') at runtime. Avoid calling
+        // config('filesystems.*') here: a published copy loads before filesystems.php.
+        'disk' => null,
         'directory' => 'filament-cloudflare-mail-sender/attachments',
         'max_file_kib' => 4096,
         'allowed_mime_types' => [

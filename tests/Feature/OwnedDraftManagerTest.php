@@ -95,6 +95,7 @@ test('owned draft operations reject invalid disk and actor identity configuratio
     $actor = new TestActor('composer-1');
     $scope = ownedDraftScope($actor);
     config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+    config()->set('filesystems.default', null);
 
     expect(fn () => resolve(OwnedDraftManager::class)->deleteUpload(
         $actor,
@@ -104,6 +105,19 @@ test('owned draft operations reject invalid disk and actor identity configuratio
 
     expect(fn () => resolve(OwnedDraftManager::class)->find(new TestActor(''), $scope->draftId))
         ->toThrow(LogicException::class, 'invalid identifier');
+});
+
+test('owned draft pruning is a no-op when attachments are disabled even without a disk', function (): void {
+    $actor = new TestActor('composer-1');
+    $scope = ownedDraftScope($actor);
+    createOwnedDraftRecord($actor, $scope, MessageStatus::Draft);
+    config()->set('filament-cloudflare-mail-sender.attachments.enabled', false);
+    config()->set('filament-cloudflare-mail-sender.attachments.disk', null);
+    config()->set('filesystems.default', null);
+
+    resolve(OwnedDraftManager::class)->pruneToAuthoritativeLedger($actor, $scope->draftId, $scope->proof);
+
+    expect(CloudflareMailMessage::query()->findOrFail($scope->draftId)->status)->toBe(MessageStatus::Draft);
 });
 
 function ownedDraftScope(TestActor $actor): OwnedUploadScope

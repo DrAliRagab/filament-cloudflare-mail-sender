@@ -50,6 +50,10 @@ Add the credentials to `config/services.php`. `token` is the preferred Laravel 1
 
 Set the package mailer and Laravel's default sender in the published configuration and `config/mail.php`. From address and name are editable by default. Set `from.editable` to `false` to lock them to the package `from.*` values (falling back to Laravel `mail.from`). When editing is enabled, keep `from.allowed_domains` limited to domains onboarded in the same Cloudflare account; an empty list derives the default sender's domain.
 
+Attachment uploads are optional. Set `attachments.enabled` to `false` to hide the upload UI and skip attachment disk requirements. When attachments stay enabled, `attachments.disk` falls back to Laravel's default filesystem disk at runtime.
+
+Sending is a two-step flow on the Compose Email page: **Preview email**, then **Queue email** in the preview panel. There is no separate Send button; queueing dispatches the package job through Laravel's mailer.
+
 ## Filament panel registration
 
 Register the plugin explicitly in each panel that should expose it:
