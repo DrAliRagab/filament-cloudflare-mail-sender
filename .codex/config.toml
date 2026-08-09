@@ -1,0 +1,11 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+[mcp_servers.filament_mail_context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+
+[mcp_servers.filament_mail_cloudflare_api]
+url = "https://mcp.cloudflare.com/mcp"
+
+[mcp_servers.filament_mail_cloudflare_docs]
+url = "https://docs.mcp.cloudflare.com/mcp"
