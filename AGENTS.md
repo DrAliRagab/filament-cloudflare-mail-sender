@@ -2,21 +2,21 @@
 
 ## Project state
 
-This repository is currently in the planning phase. Do not scaffold or implement the package until the user explicitly approves implementation. Planning documents, agent configuration, and repository guidance are allowed.
+The approved design and implementation plan have been built. Maintain the package against its tests, architecture constraints, and task reports; do not treat planning documents as permission to redesign established public behavior.
 
 ## Purpose
 
-Build a reusable Laravel 13 and Filament 5 package that lets authorized panel users compose, preview, queue, send, and audit transactional email through Laravel's first-party Cloudflare Email Sending API transport.
+Maintain a reusable Laravel 13 and Filament 5 package that lets authorized panel users compose, preview, queue, send, and audit transactional email through Laravel's first-party Cloudflare Email Sending API transport.
 
 The package must use Laravel's native `cloudflare` mail transport. Do not implement, wrap, replace, or duplicate `Illuminate\Mail\Transport\CloudflareTransport` unless a future user request explicitly changes this decision.
 
 ## Supported stack
 
 - PHP 8.4 or newer within the PHP 8.x series.
-- Laravel 13.20 or newer within Laravel 13.
+- Laravel 13.23 or newer within Laravel 13.
 - Filament 5.1 or newer within Filament 5.
 - Symfony HTTP Client 8 for Laravel's Cloudflare API transport.
-- Pest 5 and Orchestra Testbench 11 for package tests.
+- Pest 5.0.1 with Pest Laravel Plugin 5.0.1 and Orchestra Testbench 11.1 for package tests.
 - PHPStan 2 with Larastan at `level: max`.
 - Laravel Pint with the standard Laravel preset.
 - Rector 2 with Rector Laravel.
@@ -86,4 +86,5 @@ Do not claim completion until a fresh `composer verify` exits successfully. Afte
 ## Source-of-truth documents
 
 - Product and architecture: `docs/superpowers/specs/2026-08-09-filament-cloudflare-mail-sender-design.md`.
-- Implementation plan: not yet written; it must be created only after the user reviews the design specification.
+- Approved implementation plan: `docs/superpowers/plans/2026-08-09-filament-cloudflare-mail-sender.md`.
+- Implementation evidence and review history: `.superpowers/sdd/2026-08-09-filament-cloudflare-mail-sender/`.

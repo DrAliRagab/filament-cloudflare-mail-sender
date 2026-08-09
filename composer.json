@@ -1,0 +1,66 @@
+{
+    "name": "draliragab/filament-cloudflare-mail-sender",
+    "description": "A Filament panel package for composing and auditing transactional email sent through Laravel's Cloudflare mail transport.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.4",
+        "filament/filament": "^5.1",
+        "illuminate/console": "^13.23",
+        "illuminate/contracts": "^13.23",
+        "illuminate/database": "^13.23",
+        "illuminate/mail": "^13.23",
+        "illuminate/queue": "^13.23",
+        "illuminate/support": "^13.23",
+        "symfony/http-client": "^8.0"
+    },
+    "require-dev": {
+        "driftingly/rector-laravel": "^2.5",
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.0",
+        "orchestra/testbench": "^11.1",
+        "pestphp/pest": "^5.0.1",
+        "pestphp/pest-plugin-laravel": "^5.0.1",
+        "rector/rector": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "DrAliRagab\\FilamentCloudflareMailSender\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "DrAliRagab\\FilamentCloudflareMailSender\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "DrAliRagab\\FilamentCloudflareMailSender\\FilamentCloudflareMailSenderServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "format": "@php vendor/bin/pint",
+        "refactor": "@php vendor/bin/rector process",
+        "analyse": "@php vendor/bin/phpstan analyse --memory-limit=1G",
+        "test": "@php vendor/bin/pest --coverage --min=95",
+        "verify": [
+            "@composer validate --strict",
+            "@composer dump-autoload --optimize --strict-psr",
+            "@composer audit",
+            "@php vendor/bin/pint --test",
+            "@php vendor/bin/rector process --dry-run",
+            "@php vendor/bin/phpstan analyse --memory-limit=1G",
+            "@php vendor/bin/pest --coverage --min=95"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

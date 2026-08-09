@@ -1,0 +1,29 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: PHP 8.4 (${{ matrix.dependencies }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dependencies: lowest
+            composer-arguments: --prefer-lowest --prefer-stable
+          - dependencies: current
+            composer-arguments: --prefer-stable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: pcov
+          extensions: pdo_sqlite
+
+      - run: composer update --prefer-dist --no-interaction --no-progress ${{ matrix.composer-arguments }}
+      - run: composer verify

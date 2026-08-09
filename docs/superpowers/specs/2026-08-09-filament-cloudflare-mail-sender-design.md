@@ -52,14 +52,14 @@ SMTP would work with Laravel Mail, but the API transport supports Cloudflare's s
 The first release targets one deliberate stack:
 
 - PHP `^8.4`.
-- Laravel components `^13.20`.
+- Laravel components `^13.23`.
 - Filament `^5.1`.
 - Livewire `^4.0`, inherited through Filament.
 - Symfony HTTP Client `^8.0`.
-- Orchestra Testbench `^11.4` for development and testing.
-- Pest `^5.0` with Pest's Laravel plugin.
+- Orchestra Testbench `^11.1` for development and testing.
+- Pest `^5.0.1` with Pest's Laravel plugin `^5.0.1`.
 
-Laravel 13.20 is the minimum because the current Testbench 11 package line requires Laravel 13.20 or newer. Supporting older Laravel or Filament majors is explicitly deferred until a compatibility matrix and CI jobs prove them.
+Laravel 13.23 is the minimum because Pest's current Laravel plugin release requires it. Supporting older Laravel or Filament majors is explicitly deferred until a compatibility matrix and CI jobs prove them.
 
 ## Package shape
 
@@ -137,6 +137,8 @@ The sender field is populated from Laravel configuration and read-only by defaul
 Recipient fields use Filament tag-style inputs. Suggestions are built from the configured user model's email and display-name columns, capped by `recipients.suggestion_limit`. Suggestions display `Name <email@example.com>` while the stored value is the normalized email address.
 
 Users may enter addresses not present in the user model. Every tag is trimmed, lowercased for comparison, validated as an email address, deduplicated case-insensitively, and checked across To, CC, and BCC. At least one To address is required.
+
+The combined unique To, CC, and BCC count may not exceed 50, matching Cloudflare Email Sending's current REST API recipient limit. The package validates this before queueing so provider rejection is actionable in the panel.
 
 The package does not store user foreign keys for recipients. This keeps audit snapshots accurate even when a user changes their email address or is deleted.
 
@@ -255,6 +257,7 @@ Tests use Pest 5 and Orchestra Testbench 11 with an in-memory SQLite database wh
 ### Unit tests
 
 - Address normalization, validation, cross-field deduplication, and display labels.
+- Cloudflare's combined 50-recipient ceiling across To, CC, and BCC.
 - Markdown-to-HTML and Markdown-to-text rendering safety.
 - Attachment metadata and total-size calculations.
 - Status-transition rules and send-token idempotency.

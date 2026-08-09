@@ -1,0 +1,7 @@
+/.phpunit.cache/
+/.superpowers/
+/.worktrees/
+/build/
+/composer.lock
+/vendor/
+
