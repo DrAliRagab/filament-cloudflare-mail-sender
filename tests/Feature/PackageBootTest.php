@@ -2,6 +2,7 @@
 
 use DrAliRagab\FilamentCloudflareMailSender\FilamentCloudflareMailSenderPlugin;
 use DrAliRagab\FilamentCloudflareMailSender\FilamentCloudflareMailSenderServiceProvider;
+use DrAliRagab\FilamentCloudflareMailSender\Support\ConfiguredSender;
 use Filament\Panel;
 use Illuminate\Database\Migrations\Migrator;
 use Illuminate\Filesystem\Filesystem;
@@ -19,8 +20,12 @@ test('the package provider boots its defaults and the plugin has a stable identi
     expect(app()->getLoadedProviders())
         ->toHaveKey(FilamentCloudflareMailSenderServiceProvider::class)
         ->and(config('filament-cloudflare-mail-sender.mailer'))->toBe('cloudflare')
-        ->and(config('filament-cloudflare-mail-sender.from.address'))->toBe(config('mail.from.address'))
-        ->and(config('filament-cloudflare-mail-sender.from.name'))->toBe(config('mail.from.name'))
+        ->and(config('filament-cloudflare-mail-sender.from.address'))->toBeNull()
+        ->and(config('filament-cloudflare-mail-sender.from.name'))->toBeNull()
+        ->and(config('filament-cloudflare-mail-sender.from.editable'))->toBeTrue()
+        ->and(ConfiguredSender::address())->toBe(config('mail.from.address'))
+        ->and(ConfiguredSender::name())->toBe(config('mail.from.name'))
+        ->and(ConfiguredSender::editable())->toBeTrue()
         ->and($panel->hasPlugin('filament-cloudflare-mail-sender'))->toBeTrue()
         ->and($panel->getPlugin('filament-cloudflare-mail-sender'))->toBe($plugin);
 });

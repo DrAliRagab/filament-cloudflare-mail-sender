@@ -6,19 +6,17 @@ $defaultGuard = config('auth.defaults.guard');
 $guard = is_string($defaultGuard) ? $defaultGuard : null;
 $provider = is_string($guard) ? config("auth.guards.{$guard}.provider") : null;
 $recipientModel = is_string($provider) ? config("auth.providers.{$provider}.model") : null;
-$configuredFromAddress = config('mail.from.address');
-$configuredFromDomain = is_string($configuredFromAddress) && str_contains($configuredFromAddress, '@')
-    ? strtolower((string) substr(strrchr($configuredFromAddress, '@') ?: '', 1))
-    : null;
 
 return [
     'mailer' => 'cloudflare',
 
     'from' => [
-        'address' => config('mail.from.address'),
-        'name' => config('mail.from.name'),
-        'editable' => false,
-        'allowed_domains' => $configuredFromDomain === null ? [] : [$configuredFromDomain],
+        // Null falls back to config('mail.from') at runtime. Avoid calling
+        // config('mail.*') here: a published copy loads before mail.php.
+        'address' => null,
+        'name' => null,
+        'editable' => true,
+        'allowed_domains' => [],
     ],
 
     'reply_to' => [

@@ -87,7 +87,7 @@ The published `filament-cloudflare-mail-sender.php` configuration will define th
 
 - `mailer`: defaults to `cloudflare` and must refer to a configured Laravel mailer.
 - `from.address` and `from.name`: default to `mail.from.address` and `mail.from.name`.
-- `from.editable`: defaults to `false`.
+- `from.editable`: defaults to `true`. Set to `false` to lock From fields to configured/fallback values.
 - `reply_to.address` and `reply_to.name`: optional defaults.
 - `recipients.model`: defaults to the model configured for the active Laravel auth provider.
 - `recipients.email_column`: defaults to `email`.

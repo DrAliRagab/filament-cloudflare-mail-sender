@@ -115,7 +115,7 @@ test('it accepts an editable sender only on a configured sending domain', functi
     config()->set('filament-cloudflare-mail-sender.from.allowed_domains', ['example.test']);
 
     $data = new ComposedMessageData(
-        actor: new TestActor('trusted-actor-id'),
+        actor: new TestActor('composer-1'),
         recipients: RecipientAddressSet::from(['recipient@example.test'], [], []),
         subject: 'Editable sender',
         markdown: 'Hello',
@@ -127,10 +127,7 @@ test('it accepts an editable sender only on a configured sending domain', functi
         useDeliveryOverrides: true,
     );
 
-    $message = (new MessageSnapshotFactory(
-        renderer: resolve(MessageBodyRenderer::class),
-        attachmentPolicy: AttachmentPolicy::fromConfiguration(),
-    ))->createDraft($data);
+    $message = resolve(MessageSnapshotFactory::class)->createDraft($data)->refresh();
 
     expect($message->from_address)->toBe('billing@example.test')
         ->and($message->from_name)->toBe('Billing')
@@ -143,19 +140,98 @@ test('it rejects an editable sender outside configured sending domains', functio
     config()->set('filament-cloudflare-mail-sender.from.allowed_domains', ['example.test']);
 
     $data = new ComposedMessageData(
-        actor: new TestActor('trusted-actor-id'),
+        actor: new TestActor('composer-1'),
         recipients: RecipientAddressSet::from(['recipient@example.test'], [], []),
-        subject: 'Invalid sender',
+        subject: 'Editable sender',
         markdown: 'Hello',
         attachments: [],
-        fromAddress: 'billing@untrusted.test',
+        fromAddress: 'billing@other.test',
+        fromName: 'Billing',
         useDeliveryOverrides: true,
     );
 
-    expect(fn (): CloudflareMailMessage => (new MessageSnapshotFactory(
-        renderer: resolve(MessageBodyRenderer::class),
-        attachmentPolicy: AttachmentPolicy::fromConfiguration(),
-    ))->createDraft($data))->toThrow(InvalidMessageSnapshot::class, 'allowed sending domain');
+    expect(fn () => resolve(MessageSnapshotFactory::class)->createDraft($data))
+        ->toThrow(InvalidMessageSnapshot::class, 'allowed sending domain');
+});
+
+test('locked sender configuration ignores delivery overrides from callers', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from.editable', false);
+
+    $data = new ComposedMessageData(
+        actor: new TestActor('composer-1'),
+        recipients: RecipientAddressSet::from(['recipient@example.test'], [], []),
+        subject: 'Locked sender',
+        markdown: 'Hello',
+        attachments: [],
+        fromAddress: 'attacker@untrusted.test',
+        fromName: 'Attacker',
+        useDeliveryOverrides: true,
+    );
+
+    $message = resolve(MessageSnapshotFactory::class)->createDraft($data)->refresh();
+
+    expect($message->from_address)->toBe('sender@example.test')
+        ->and($message->from_name)->toBe('Sender Name');
+});
+
+test('editable sender with empty allowed domains derives the default sender domain', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from', [
+        'address' => 'sender@example.test',
+        'name' => 'Sender Name',
+        'editable' => true,
+        'allowed_domains' => [],
+    ]);
+
+    $allowed = new ComposedMessageData(
+        actor: new TestActor('composer-1'),
+        recipients: RecipientAddressSet::from(['recipient@example.test'], [], []),
+        subject: 'Derived allow-list',
+        markdown: 'Hello',
+        attachments: [],
+        fromAddress: 'billing@example.test',
+        fromName: 'Billing',
+        useDeliveryOverrides: true,
+    );
+    $rejected = new ComposedMessageData(
+        actor: new TestActor('composer-1'),
+        recipients: RecipientAddressSet::from(['recipient@example.test'], [], []),
+        subject: 'Derived allow-list',
+        markdown: 'Hello',
+        attachments: [],
+        fromAddress: 'billing@other.test',
+        fromName: 'Billing',
+        useDeliveryOverrides: true,
+    );
+
+    $message = resolve(MessageSnapshotFactory::class)->createDraft($allowed)->refresh();
+
+    expect($message->from_address)->toBe('billing@example.test')
+        ->and(fn () => resolve(MessageSnapshotFactory::class)->createDraft($rejected))
+        ->toThrow(InvalidMessageSnapshot::class, 'allowed sending domain');
+});
+
+test('editable sender with no default address and empty allowed domains rejects overrides', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from', [
+        'address' => null,
+        'name' => null,
+        'editable' => true,
+        'allowed_domains' => [],
+    ]);
+    config()->set('mail.from.address', null);
+
+    $data = new ComposedMessageData(
+        actor: new TestActor('composer-1'),
+        recipients: RecipientAddressSet::from(['recipient@example.test'], [], []),
+        subject: 'No allow-list',
+        markdown: 'Hello',
+        attachments: [],
+        fromAddress: 'billing@example.test',
+        fromName: 'Billing',
+        useDeliveryOverrides: true,
+    );
+
+    expect(fn () => resolve(MessageSnapshotFactory::class)->createDraft($data))
+        ->toThrow(InvalidMessageSnapshot::class, 'allowed sending domain');
 });
 
 test('it rejects an untrusted actor value before an audit identity can be spoofed', function (): void {
@@ -295,6 +371,26 @@ test('snapshots reject invalid top-level delivery configuration', function (stri
     'invalid From configuration' => ['filament-cloudflare-mail-sender.from', 'sender@example.test'],
     'invalid Reply-To configuration' => ['filament-cloudflare-mail-sender.reply_to', 'reply@example.test'],
 ]);
+
+test('snapshots fall back to Laravel mail.from when package from address and name are empty', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from', [
+        'address' => null,
+        'name' => null,
+        'editable' => false,
+        'allowed_domains' => [],
+    ]);
+    config()->set('mail.from', [
+        'address' => 'ops@example.test',
+        'name' => 'Operations',
+    ]);
+
+    $message = resolve(MessageSnapshotFactory::class)
+        ->createDraft(snapshotDataForActor(new TestActor('composer-1')))
+        ->refresh();
+
+    expect($message->from_address)->toBe('ops@example.test')
+        ->and($message->from_name)->toBe('Operations');
+});
 
 test('snapshots reject invalid configured sender and reply-to combinations', function (array $from, array $replyTo): void {
     config()->set('filament-cloudflare-mail-sender.from', $from);

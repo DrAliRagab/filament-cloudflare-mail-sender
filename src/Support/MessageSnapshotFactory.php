@@ -150,13 +150,23 @@ final readonly class MessageSnapshotFactory
         }
 
         $configuredFromAddress = $from['address'] ?? null;
-        $fromEditable = ($from['editable'] ?? false) === true;
+        $configuredFromName = $from['name'] ?? null;
+
+        if ($configuredFromAddress === null || $configuredFromAddress === '') {
+            $configuredFromAddress = ConfiguredSender::address();
+        }
+
+        if ($configuredFromName === null || $configuredFromName === '') {
+            $configuredFromName = ConfiguredSender::name();
+        }
+
+        $fromEditable = ConfiguredSender::editable();
         $fromAddress = ($data->useDeliveryOverrides && $fromEditable)
             ? $data->fromAddress
             : $configuredFromAddress;
         $fromName = $this->nullableString(($data->useDeliveryOverrides && $fromEditable)
             ? $data->fromName
-            : ($from['name'] ?? null));
+            : $configuredFromName);
         $replyToAddress = $this->nullableString($data->useDeliveryOverrides
             ? $data->replyToAddress
             : ($replyTo['address'] ?? null));
@@ -194,11 +204,24 @@ final readonly class MessageSnapshotFactory
             throw new InvalidMessageSnapshot('The configured delivery settings are invalid.');
         }
 
+        $allowedDomains = array_values(array_filter(
+            array_map(
+                static fn (mixed $allowedDomain): string => is_string($allowedDomain) ? strtolower(trim($allowedDomain)) : '',
+                $allowedDomains,
+            ),
+            static fn (string $allowedDomain): bool => $allowedDomain !== '',
+        ));
+
+        if ($allowedDomains === []) {
+            $defaultAddress = ConfiguredSender::address();
+            $defaultDomain = is_string($defaultAddress) && str_contains($defaultAddress, '@')
+                ? strtolower((string) substr(strrchr($defaultAddress, '@') ?: '', 1))
+                : '';
+
+            $allowedDomains = $defaultDomain === '' ? [] : [$defaultDomain];
+        }
+
         $domain = strtolower((string) substr(strrchr($fromAddress, '@') ?: '', 1));
-        $allowedDomains = array_map(
-            static fn (mixed $allowedDomain): string => is_string($allowedDomain) ? strtolower(trim($allowedDomain)) : '',
-            $allowedDomains,
-        );
 
         if ($domain === '' || ! in_array($domain, $allowedDomains, true)) {
             throw new InvalidMessageSnapshot('The sender must use an allowed sending domain.');

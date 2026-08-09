@@ -39,7 +39,7 @@ Do not broaden framework compatibility without current dependency evidence and a
 ## Product constraints
 
 - Cloudflare Email Sending is for transactional email. Do not add newsletter, campaign, audience segmentation, or bulk-marketing features.
-- The default From address is locked in the UI. A published configuration option may allow editing, but every address must remain valid for the application's onboarded Cloudflare sending domain.
+- The default From address and name are editable in the UI. A published configuration option may lock them to the package `from.*` values (falling back to Laravel `mail.from`), and every address must remain valid for the application's onboarded Cloudflare sending domain.
 - Preview must show From, Reply-To, To, CC, BCC, subject, rendered HTML, plain text, and attachment metadata before confirmation.
 - Logs may contain sensitive content. Access must follow the package authorization callback, secrets must never be stored, and failure details must be sanitized.
 - Do not represent `sent` as `delivered`, and do not invent Cloudflare message IDs or per-recipient delivery states.

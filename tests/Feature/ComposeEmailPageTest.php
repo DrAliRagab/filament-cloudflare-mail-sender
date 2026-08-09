@@ -36,7 +36,7 @@ beforeEach(function (): void {
     config()->set('filament-cloudflare-mail-sender.from', [
         'address' => 'sender@example.test',
         'name' => 'Sender Team',
-        'editable' => false,
+        'editable' => true,
         'allowed_domains' => ['example.test'],
     ]);
     config()->set('filament-cloudflare-mail-sender.reply_to', [
@@ -85,7 +85,8 @@ test('compose uses native Filament fields with configured defaults and upload po
             'cc' => [],
             'bcc' => [],
         ])
-        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && $component->isDisabled())
+        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && ! $component->isDisabled())
+        ->assertSchemaComponentExists('from_name', 'form', static fn (mixed $component): bool => $component instanceof TextInput && ! $component->isDisabled())
         ->assertSchemaComponentExists('to', 'form', static fn (mixed $component): bool => $component instanceof TagsInput && $component->getSuggestions() === ['Known User <known@example.test>'])
         ->assertSchemaComponentExists('cc', 'form', static fn (mixed $component): bool => $component instanceof TagsInput)
         ->assertSchemaComponentExists('bcc', 'form', static fn (mixed $component): bool => $component instanceof TagsInput)
@@ -98,6 +99,122 @@ test('compose uses native Filament fields with configured defaults and upload po
                 && str_starts_with((string) $component->getDirectory(), 'mail-attachments/')
                 && $component->getMaxSize() === 2048;
         });
+});
+
+test('compose persists an edited from address and name when sender editing is enabled', function (): void {
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState([
+            'from_address' => 'billing@example.test',
+            'from_name' => 'Billing Desk',
+        ]))
+        ->call('previewEmail')
+        ->assertHasNoErrors()
+        ->assertSet('preview.from', 'Billing Desk <billing@example.test>');
+
+    $draft = CloudflareMailMessage::query()->sole();
+
+    expect($draft->from_address)->toBe('billing@example.test')
+        ->and($draft->from_name)->toBe('Billing Desk');
+});
+
+test('compose rejects an edited from address outside allowed sending domains', function (): void {
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState([
+            'from_address' => 'attacker@untrusted.test',
+            'from_name' => 'Attacker',
+        ]))
+        ->call('previewEmail')
+        ->assertHasErrors(['data']);
+
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+});
+
+test('compose rejects a blank from address while sender editing is enabled', function (): void {
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState([
+            'from_address' => '',
+            'from_name' => 'Nameless',
+        ]))
+        ->call('previewEmail')
+        ->assertHasErrors(['data.from_address']);
+
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+});
+
+test('compose rejects an invalid from address while sender editing is enabled', function (): void {
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState([
+            'from_address' => 'not-an-email',
+            'from_name' => 'Broken',
+        ]))
+        ->call('previewEmail')
+        ->assertHasErrors(['data.from_address']);
+
+    expect(CloudflareMailMessage::query()->count())->toBe(0);
+});
+
+test('compose can clear from name while keeping a valid editable from address', function (): void {
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState([
+            'from_address' => 'billing@example.test',
+            'from_name' => null,
+        ]))
+        ->call('previewEmail')
+        ->assertHasNoErrors()
+        ->assertSet('preview.from', 'billing@example.test');
+
+    expect(CloudflareMailMessage::query()->sole()->from_name)->toBeNull();
+});
+
+test('duplicate prefill copies the historical sender when from editing is enabled', function (): void {
+    $source = composeAuditMessage([
+        'from_address' => 'historical@example.test',
+        'from_name' => 'Historical Sender',
+    ]);
+
+    Livewire::withQueryParams(['duplicate' => $source->id]);
+    Livewire::test(ComposeEmail::class)
+        ->assertSchemaStateSet([
+            'from_address' => 'historical@example.test',
+            'from_name' => 'Historical Sender',
+        ]);
+});
+
+test('locked compose from fields fall back to Laravel mail.from when package from is empty', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from', [
+        'address' => null,
+        'name' => null,
+        'editable' => false,
+        'allowed_domains' => [],
+    ]);
+    config()->set('mail.from', [
+        'address' => 'ops@example.test',
+        'name' => 'Operations',
+    ]);
+
+    Livewire::test(ComposeEmail::class)
+        ->assertOk()
+        ->assertSchemaStateSet([
+            'from_address' => 'ops@example.test',
+            'from_name' => 'Operations',
+        ])
+        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && $component->isDisabled())
+        ->assertSchemaComponentExists('from_name', 'form', static fn (mixed $component): bool => $component instanceof TextInput && $component->isDisabled());
+});
+
+test('locked compose prefers package from values over Laravel mail.from', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from.editable', false);
+    config()->set('mail.from', [
+        'address' => 'mailer@example.test',
+        'name' => 'Mailer Default',
+    ]);
+
+    Livewire::test(ComposeEmail::class)
+        ->assertSchemaStateSet([
+            'from_address' => 'sender@example.test',
+            'from_name' => 'Sender Team',
+        ])
+        ->assertSchemaComponentExists('from_address', 'form', static fn (mixed $component): bool => $component instanceof TextInput && $component->isDisabled());
 });
 
 test('compose access uses the plugin callback on every Livewire request', function (): void {
@@ -392,6 +509,8 @@ test('duplicate prefill copies message fields without attachments draft identity
 });
 
 test('duplicate prefill keeps the current configured sender when from editing is locked', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from.editable', false);
+
     $source = composeAuditMessage([
         'from_address' => 'historical@old-domain.test',
         'from_name' => 'Historical Sender',
@@ -441,6 +560,8 @@ test('preview persists one authoritative draft before confirmation', function ()
 });
 
 test('preview ignores a forged sender when sender editing is locked', function (): void {
+    config()->set('filament-cloudflare-mail-sender.from.editable', false);
+
     Livewire::test(ComposeEmail::class)
         ->fillForm(composeValidState([
             'from_address' => 'attacker@untrusted.test',
@@ -453,6 +574,17 @@ test('preview ignores a forged sender when sender editing is locked', function (
 
     expect($draft->from_address)->toBe('sender@example.test')
         ->and($draft->from_name)->toBe('Sender Team');
+});
+
+test('preview accepts an edited sender when editing is enabled and the domain is allowed', function (): void {
+    Livewire::test(ComposeEmail::class)
+        ->fillForm(composeValidState([
+            'from_address' => 'support@example.test',
+            'from_name' => 'Support',
+        ]))
+        ->call('previewEmail')
+        ->assertHasNoErrors()
+        ->assertSet('preview.from', 'Support <support@example.test>');
 });
 
 test('queue rejects a forged preview proof', function (): void {

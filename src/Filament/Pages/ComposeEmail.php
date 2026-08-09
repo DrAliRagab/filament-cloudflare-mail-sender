@@ -16,6 +16,7 @@ use DrAliRagab\FilamentCloudflareMailSender\Exceptions\MissingToRecipient;
 use DrAliRagab\FilamentCloudflareMailSender\Exceptions\RecipientLimitExceeded;
 use DrAliRagab\FilamentCloudflareMailSender\FilamentCloudflareMailSenderPlugin;
 use DrAliRagab\FilamentCloudflareMailSender\Models\CloudflareMailMessage;
+use DrAliRagab\FilamentCloudflareMailSender\Support\ConfiguredSender;
 use DrAliRagab\FilamentCloudflareMailSender\Support\MessageDeliveryService;
 use DrAliRagab\FilamentCloudflareMailSender\Support\MessageSnapshotFactory;
 use DrAliRagab\FilamentCloudflareMailSender\Support\OwnedDraftManager;
@@ -89,7 +90,7 @@ final class ComposeEmail extends Page
     {
         $attachmentConfig = config('filament-cloudflare-mail-sender.attachments', []);
         $attachmentConfig = is_array($attachmentConfig) ? $attachmentConfig : [];
-        $fromEditable = config('filament-cloudflare-mail-sender.from.editable') === true;
+        $fromEditable = ConfiguredSender::editable();
 
         return $schema
             ->statePath('data')
@@ -470,8 +471,8 @@ final class ComposeEmail extends Page
     private function initialState(): array
     {
         return [
-            'from_address' => config('filament-cloudflare-mail-sender.from.address'),
-            'from_name' => config('filament-cloudflare-mail-sender.from.name'),
+            'from_address' => ConfiguredSender::address(),
+            'from_name' => ConfiguredSender::name(),
             'reply_to_address' => config('filament-cloudflare-mail-sender.reply_to.address'),
             'reply_to_name' => config('filament-cloudflare-mail-sender.reply_to.name'),
             'to' => [],
@@ -491,10 +492,10 @@ final class ComposeEmail extends Page
         }
 
         $message = CloudflareMailMessage::query()->findOrFail($messageId);
-        $fromEditable = config('filament-cloudflare-mail-sender.from.editable') === true;
+        $fromEditable = ConfiguredSender::editable();
         $this->formSchema()->fill([
-            'from_address' => $fromEditable ? $message->from_address : config('filament-cloudflare-mail-sender.from.address'),
-            'from_name' => $fromEditable ? $message->from_name : config('filament-cloudflare-mail-sender.from.name'),
+            'from_address' => $fromEditable ? $message->from_address : ConfiguredSender::address(),
+            'from_name' => $fromEditable ? $message->from_name : ConfiguredSender::name(),
             'reply_to_address' => $message->reply_to_address,
             'reply_to_name' => $message->reply_to_name,
             'to' => $message->to,
