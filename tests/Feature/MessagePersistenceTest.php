@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Carbon\CarbonImmutable;
 use DrAliRagab\FilamentCloudflareMailSender\Enums\MessageStatus;
 use DrAliRagab\FilamentCloudflareMailSender\Models\CloudflareMailMessage;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -9,7 +10,14 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Str;
 
-test('it persists immutable package-owned mail audit snapshots with a ULID', function (): void {
+afterEach(function (): void {
+    Date::setTestNow();
+    Date::useDefault();
+});
+
+test('it persists immutable package-owned mail audit snapshots with a ULID', function (bool $immutable): void {
+    $dateClass = $immutable ? CarbonImmutable::class : Carbon::class;
+    Date::use($dateClass);
     $queuedAt = Date::parse('2026-08-09 12:00:00');
     $sendToken = (string) Str::uuid();
 
@@ -63,9 +71,13 @@ test('it persists immutable package-owned mail audit snapshots with a ULID', fun
         ]])
         ->and($message->status)->toBe(MessageStatus::Queued)
         ->and($message->queued_at)->toEqual($queuedAt)
-        ->and($message->created_at)->toBeInstanceOf(Carbon::class)
-        ->and($message->updated_at)->toBeInstanceOf(Carbon::class);
-});
+        ->and($message->queued_at)->toBeInstanceOf($dateClass)
+        ->and($message->created_at)->toBeInstanceOf($dateClass)
+        ->and($message->updated_at)->toBeInstanceOf($dateClass);
+})->with([
+    'mutable dates' => [false],
+    'immutable dates' => [true],
+]);
 
 test('it prevents an assigned send token from being changed', function (): void {
     $message = CloudflareMailMessage::query()->create(messageAttributes());

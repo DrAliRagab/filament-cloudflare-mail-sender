@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace DrAliRagab\FilamentCloudflareMailSender\Console\Commands;
 
+use Carbon\CarbonInterface;
 use DrAliRagab\FilamentCloudflareMailSender\Enums\MessageStatus;
 use DrAliRagab\FilamentCloudflareMailSender\Models\CloudflareMailMessage;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -67,7 +67,7 @@ final class PruneCloudflareMailMessages extends Command
     }
 
     /** @return Builder<CloudflareMailMessage> */
-    private function expiredQuery(Carbon $cutoff): Builder
+    private function expiredQuery(CarbonInterface $cutoff): Builder
     {
         return CloudflareMailMessage::query()->where(function (Builder $query) use ($cutoff): void {
             $query
@@ -86,7 +86,7 @@ final class PruneCloudflareMailMessages extends Command
         });
     }
 
-    private function prune(string $id, Carbon $cutoff, string $configuredDisk, string $configuredRoot): bool
+    private function prune(string $id, CarbonInterface $cutoff, string $configuredDisk, string $configuredRoot): bool
     {
         return DB::transaction(function () use ($id, $cutoff, $configuredDisk, $configuredRoot): bool {
             $message = CloudflareMailMessage::query()->lockForUpdate()->find($id);
@@ -115,7 +115,7 @@ final class PruneCloudflareMailMessages extends Command
         });
     }
 
-    private function isExpired(CloudflareMailMessage $message, Carbon $cutoff): bool
+    private function isExpired(CloudflareMailMessage $message, CarbonInterface $cutoff): bool
     {
         return match ($message->status) {
             MessageStatus::Sent => $message->sent_at?->lt($cutoff) ?? false,

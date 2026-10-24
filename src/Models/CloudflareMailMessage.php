@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace DrAliRagab\FilamentCloudflareMailSender\Models;
 
+use Carbon\CarbonInterface;
 use DrAliRagab\FilamentCloudflareMailSender\Enums\MessageStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Carbon;
 use LogicException;
 
 /**
@@ -30,14 +30,14 @@ use LogicException;
  * @property MessageStatus $status
  * @property int $attempt_count
  * @property string|null $send_token
- * @property Carbon|null $queued_at
- * @property Carbon|null $sent_at
- * @property Carbon|null $failed_at
- * @property Carbon|null $cancelled_at
+ * @property CarbonInterface|null $queued_at
+ * @property CarbonInterface|null $sent_at
+ * @property CarbonInterface|null $failed_at
+ * @property CarbonInterface|null $cancelled_at
  * @property string|null $failure_class
  * @property string|null $failure_message
- * @property Carbon|null $created_at
- * @property Carbon|null $updated_at
+ * @property CarbonInterface|null $created_at
+ * @property CarbonInterface|null $updated_at
  */
 final class CloudflareMailMessage extends Model
 {

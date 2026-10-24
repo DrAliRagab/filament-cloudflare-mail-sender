@@ -1,0 +1,2 @@
+providers:
+    - DrAliRagab\FilamentCloudflareMailSender\FilamentCloudflareMailSenderServiceProvider

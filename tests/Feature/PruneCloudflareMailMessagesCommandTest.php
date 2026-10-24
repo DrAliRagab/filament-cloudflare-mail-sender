@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
+use Carbon\CarbonImmutable;
 use DrAliRagab\FilamentCloudflareMailSender\Enums\MessageStatus;
 use DrAliRagab\FilamentCloudflareMailSender\Models\CloudflareMailMessage;
 use Illuminate\Console\Command;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Filesystem\FilesystemManager;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Storage;
@@ -21,6 +23,7 @@ beforeEach(function (): void {
 
 afterEach(function (): void {
     Date::setTestNow();
+    Date::useDefault();
 });
 
 test('the prune command is registered for console use and null retention is a no-op', function (): void {
@@ -35,14 +38,20 @@ test('the prune command is registered for console use and null retention is a no
     expect($message->fresh())->not->toBeNull();
 });
 
-test('it prunes only terminal records strictly older than their terminal cutoff', function (): void {
+test('it prunes only terminal records strictly older than their terminal cutoff', function (bool $immutable): void {
+    $dateClass = $immutable ? CarbonImmutable::class : Carbon::class;
+    Date::use($dateClass);
     config()->set('filament-cloudflare-mail-sender.audit.retention_days', 30);
     $cutoff = Date::now()->subDays(30);
+
+    expect($cutoff)->toBeInstanceOf($dateClass);
 
     $expiredSent = pruneMessage(MessageStatus::Sent, $cutoff->copy()->subSecond());
     $expiredFailed = pruneMessage(MessageStatus::Failed, $cutoff->copy()->subDay());
     $expiredCancelled = pruneMessage(MessageStatus::Cancelled, $cutoff->copy()->subYear());
     $boundarySent = pruneMessage(MessageStatus::Sent, $cutoff);
+    $boundaryFailed = pruneMessage(MessageStatus::Failed, $cutoff);
+    $boundaryCancelled = pruneMessage(MessageStatus::Cancelled, $cutoff);
     $recentFailed = pruneMessage(MessageStatus::Failed, $cutoff->copy()->addSecond());
     $draft = pruneMessage(MessageStatus::Draft, $cutoff->copy()->subYear());
     $queued = pruneMessage(MessageStatus::Queued, $cutoff->copy()->subYear());
@@ -54,13 +63,20 @@ test('it prunes only terminal records strictly older than their terminal cutoff'
         ->and($expiredFailed->fresh())->toBeNull()
         ->and($expiredCancelled->fresh())->toBeNull()
         ->and($boundarySent->fresh())->not->toBeNull()
+        ->and($boundaryFailed->fresh())->not->toBeNull()
+        ->and($boundaryCancelled->fresh())->not->toBeNull()
         ->and($recentFailed->fresh())->not->toBeNull()
         ->and($draft->fresh())->not->toBeNull()
         ->and($queued->fresh())->not->toBeNull()
         ->and($sending->fresh())->not->toBeNull();
-});
+})->with([
+    'mutable dates' => [false],
+    'immutable dates' => [true],
+]);
 
-test('it deletes root-owned attachments before pruning and accepts already missing files', function (): void {
+test('it deletes root-owned attachments before pruning and accepts already missing files', function (bool $immutable): void {
+    $dateClass = $immutable ? CarbonImmutable::class : Carbon::class;
+    Date::use($dateClass);
     config()->set('filament-cloudflare-mail-sender.audit.retention_days', 1);
     $existingPath = pruneAttachmentPath('existing.pdf');
     $missingPath = pruneAttachmentPath('missing.pdf');
@@ -74,7 +90,10 @@ test('it deletes root-owned attachments before pruning and accepts already missi
     expect(Storage::disk('prune-attachments')->exists($existingPath))->toBeFalse()
         ->and($withExisting->fresh())->toBeNull()
         ->and($withMissing->fresh())->toBeNull();
-});
+})->with([
+    'mutable dates' => [false],
+    'immutable dates' => [true],
+]);
 
 test('it refuses to delete or prune attachment metadata outside the configured package root', function (): void {
     config()->set('filament-cloudflare-mail-sender.audit.retention_days', 1);

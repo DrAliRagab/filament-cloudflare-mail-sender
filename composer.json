@@ -57,6 +57,14 @@
     },
     "config": {
         "sort-packages": true,
+        "policy": {
+            "abandoned": {
+                "audit": "fail",
+                "ignore": {
+                    "symplify/rule-doc-generator-contracts": "Temporarily allowed as a rector-laravel development dependency; remove when upstream replaces it."
+                }
+            }
+        },
         "allow-plugins": {
             "pestphp/pest-plugin": true
         }
